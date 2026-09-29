@@ -38,6 +38,8 @@ function localStore() {
     async listEvents() { return db.events; },
     async listPublications() { return db.publications || []; },
     async lastSync() { return null; },
+    async pubblieConnected() { return false; },
+    connectUrl() { return null; },
     async syncNow() { throw new Error('Non disponibile in modalità demo'); },
     async saveClient(c) {
       const i = db.clients.findIndex((x) => x.id === c.id);
@@ -103,6 +105,12 @@ async function supabaseStore() {
     async listClients() { return ok(await sb.from('clients').select('*').order('name')); },
     async listEvents() { return ok(await sb.from('events').select('*').order('date', { ascending: false })); },
     async listPublications() { return ok(await sb.from('publications').select('*').order('date')); },
+    async pubblieConnected() { return ok(await sb.rpc('pubblie_connected')); },
+    // Avvia il login OAuth su Pubblie: la funzione sync-pubblie registra l'app, rimanda a Pubblie e poi qui.
+    connectUrl() {
+      const back = location.origin + location.pathname;
+      return `${CONFIG.SUPABASE_URL}/functions/v1/sync-pubblie?action=connect&k=${encodeURIComponent(key || '')}&return=${encodeURIComponent(back)}`;
+    },
     async lastSync() {
       return ok(await sb.from('sync_runs').select('*').not('finished_at', 'is', null).order('started_at', { ascending: false }).limit(1))[0] || null;
     },
@@ -178,14 +186,17 @@ function compute(c, events) {
 
 // ---------- Stato app ----------
 let store;
-let state = { clients: [], events: [], publications: [], lastSync: null, view: 'scadenze', month: today().slice(0, 7), monthClient: '', showHidden: false };
+let state = { clients: [], events: [], publications: [], lastSync: null, pubblieConnected: false, notice: null, view: 'scadenze', month: today().slice(0, 7), monthClient: '', showHidden: false };
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal');
 const $form = document.getElementById('modal-form');
 
 async function reload() {
-  const [clients, events, publications, lastSync] = await Promise.all([store.listClients(), store.listEvents(), store.listPublications(), store.lastSync()]);
+  const [clients, events, publications, lastSync, connected] = await Promise.all([
+    store.listClients(), store.listEvents(), store.listPublications(), store.lastSync(), store.pubblieConnected(),
+  ]);
   state.lastSync = lastSync;
+  state.pubblieConnected = connected;
   state.clients = clients.map((c) => ({ ...c, schedule: (c.schedule || []).map(Number) }));
   state.events = events;
   state.publications = publications;
@@ -359,7 +370,9 @@ function viewMese() {
       <button id="m-next" aria-label="Mese successivo">›</button>
       ${ym !== t.slice(0, 7) ? '<button id="m-today">Oggi</button>' : ''}
       <span class="sync-info small muted" id="sync-info">${syncLabel()}</span>
-      <button id="m-sync" ${store.mode === 'demo' ? 'hidden' : ''}>Aggiorna da Pubblie</button>
+      ${store.mode === 'demo' ? '' : state.pubblieConnected
+        ? '<button id="m-sync">Aggiorna da Pubblie</button>'
+        : `<a class="btn primary" href="${esc(store.connectUrl())}">Collega Pubblie</a>`}
       <select id="m-client" aria-label="Filtra cliente">
         <option value="">Tutti i clienti</option>
         ${[...state.clients].filter((c) => !c.hidden).sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${c.id}" ${c.id === only ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
@@ -372,6 +385,7 @@ function viewMese() {
       <span><i class="lg ready"></i>Uscita prevista, video pronto</span>
       <span><i class="lg missing"></i>Uscita prevista, video da montare</span>
     </div>
+    ${state.notice ? `<p class="notice ${state.notice.ok ? 'ok' : 'warn'}">${esc(state.notice.text)}</p>` : ''}
     ${!hasData && last < t ? '<p class="muted small">Nessuna pubblicazione importata da Pubblie per questo mese.</p>' : ''}
     <div class="month-grid">
       ${['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'].map((d) => `<div class="dow-head">${d}</div>`).join('')}
@@ -402,7 +416,7 @@ function viewMese() {
   document.getElementById('m-next').onclick = () => { state.month = shiftMonth(ym, 1); render(); };
   document.getElementById('m-today')?.addEventListener('click', () => { state.month = t.slice(0, 7); render(); });
   document.getElementById('m-client').onchange = (e) => { state.monthClient = e.target.value; render(); };
-  document.getElementById('m-sync').onclick = async (e) => {
+  document.getElementById('m-sync')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
     btn.textContent = 'Aggiorno…';
@@ -414,7 +428,31 @@ function viewMese() {
       btn.disabled = false;
       btn.textContent = 'Aggiorna da Pubblie';
     }
-  };
+  });
+}
+
+// Ritorno dal login su Pubblie: ?pubblie=collegato oppure ?pubblie=errore: ...
+async function handlePubblieReturn() {
+  const url = new URL(location.href);
+  const result = url.searchParams.get('pubblie');
+  if (!result) return;
+  url.searchParams.delete('pubblie');
+  history.replaceState(null, '', url);
+  state.view = 'mese';
+  if (result !== 'collegato') {
+    state.notice = { ok: false, text: `Collegamento a Pubblie non riuscito: ${result.replace(/^errore:\s*/, '')}` };
+    render();
+    return;
+  }
+  state.notice = { ok: true, text: 'Pubblie collegato. Sto scaricando i post…' };
+  render();
+  try {
+    const out = await store.syncNow();
+    state.notice = { ok: true, text: `Pubblie collegato: ${out.posts} post sincronizzati. Da ora si aggiorna da solo ogni 2 ore.` };
+  } catch (err) {
+    state.notice = { ok: false, text: `Pubblie collegato, ma la prima sincronizzazione è fallita: ${err.message}` };
+  }
+  await reload();
 }
 
 function syncLabel() {
@@ -695,6 +733,7 @@ async function start() {
     ? `<span class="badge soon" title="I dati restano solo in questo browser">Demo locale</span>` : '';
   store.subscribe(() => { if (!document.activeElement?.closest('.list-edit')) reload(); });
   await reload();
+  await handlePubblieReturn();
 }
 
 document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => { state.view = b.dataset.view; render(); });

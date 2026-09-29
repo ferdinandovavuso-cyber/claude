@@ -28,14 +28,11 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 - **Clienti**: importati da `fvl-core.crm_clienti` (collegati con `crm_id`). `videos_per_month` viene dal campo `video_da_fare` del CRM.
 
 ### Sincronizzazione con Pubblie (zero token)
-La Edge Function `sync-pubblie` (codice in `supabase/functions/sync-pubblie/`) chiama direttamente il server MCP di Pubblie, senza nessun modello AI, e aggiorna la tabella `publications`: ultimi 7 giorni e prossimi 60.
-- Parte da sola ogni 2 ore (job `pg_cron` "sync-pubblie") e dal pulsante **Aggiorna da Pubblie** nella vista Mese.
-- Servono due secret in Supabase → Edge Functions → Secrets: `PUBBLIE_MCP_URL` e `PUBBLIE_MCP_TOKEN`.
-- I post vengono abbinati ai clienti tramite `clients.pubblie_accounts` (nomi esatti degli account su Pubblie). I canali senza cliente compaiono in grigio.
-- L'esito di ogni giro è in `sync_runs`.
-
-### Cambiare la chiave (se il link finisce nelle mani sbagliate)
-SQL Editor del progetto `fvl-montaggio`: `update public.planner_access set key = '<nuova-chiave>';` poi manda il nuovo link a chi deve usarlo.
+La Edge Function `sync-pubblie` (codice in `supabase/functions/sync-pubblie/`) chiama direttamente il server MCP di Pubblie (`https://pubblie.io/mcp`), senza nessun modello AI, e aggiorna la tabella `publications`: ultimi 7 giorni e prossimi 60.
+- **Collegamento, una volta sola**: vista Mese → **Collega Pubblie** → login su Pubblie → autorizzi. L'app si registra da sola su Pubblie (OAuth con registrazione dinamica) e la funzione rinnova l'accesso con il refresh token. I token stanno in `pubblie_oauth`, mai esposta all'app.
+- Parte da sola ogni 2 ore (job `pg_cron` "sync-pubblie") e dal pulsante **Aggiorna da Pubblie**.
+- I post vengono abbinati ai clienti tramite `clients.pubblie_accounts`. I canali senza cliente compaiono in Clienti, da collegare con un menu.
+- L'esito di ogni giro è in `sync_runs`. Se Pubblie revoca l'accesso, basta premere di nuovo **Collega Pubblie**.
 
 ### Cosa si modifica dall'app (senza toccare il database)
 - **Clienti**: nome, colore, giorni di uscita, anticipo, pulsante Nascondi/Mostra.
