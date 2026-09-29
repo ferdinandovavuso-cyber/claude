@@ -129,6 +129,49 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .week label { text-align: center; }
 .week input { text-align: center; padding: 6px 2px; }
 
+.month-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.month-bar h2 { margin: 0 8px; font-size: 20px; text-transform: capitalize; min-width: 170px; text-align: center; }
+.month-bar select { margin-left: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; }
+.lg-i { display: inline-block; width: 16px; text-align: center; margin-right: 4px; color: var(--ok); }
+.lg-i.warn { color: var(--late); }
+.lg.ready { border: 1.5px solid var(--ok); }
+.lg.missing { border: 1.5px dashed var(--late); background: transparent; }
+.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.dow-head { font-size: 12px; color: var(--muted); text-align: center; padding: 2px 0; }
+.day-cell { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px; min-height: 96px; min-width: 0; }
+.day-cell.blank { background: transparent; border-color: transparent; }
+.day-cell.past { background: color-mix(in srgb, var(--surface) 70%, var(--bg)); }
+.day-cell.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.day-num { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.day-num .dow { display: none; }
+.chips { display: flex; flex-direction: column; gap: 3px; }
+.chip { display: flex; align-items: center; gap: 5px; font-size: 11.5px; line-height: 1.25; padding: 2px 6px; border-radius: 5px; background: var(--surface-2); border: 1px solid transparent; min-width: 0; cursor: default; }
+.chip i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.pub::before { font-weight: 700; flex: none; }
+.chip.published::before { content: '✓'; color: var(--ok); }
+.chip.scheduled::before { content: '⏱'; }
+.chip.error::before, .chip.partial::before { content: '!'; color: var(--late); }
+.chip.removed::before { content: '✕'; color: var(--muted); }
+.chip.removed .chip-name { text-decoration: line-through; color: var(--muted); }
+.chip.unmapped .chip-name { font-style: italic; color: var(--muted); }
+.chip.plan { background: transparent; }
+.chip.plan.ready { border-color: var(--ok); }
+.chip.plan.missing { border: 1px dashed var(--late); color: var(--late); }
+.section-title { font-size: 16px; margin: 24px 0 10px; text-transform: none; }
+.month-summary .num { text-align: center; }
+
+@media (max-width: 760px) {
+  .month-grid { grid-template-columns: 1fr; gap: 4px; }
+  .dow-head, .day-cell.blank { display: none; }
+  .day-cell { min-height: 0; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: start; }
+  .day-num .dow { display: inline; font-weight: 500; color: var(--muted); margin-right: 4px; text-transform: capitalize; }
+  .day-cell.past:not(:has(.chip)) { display: none; }
+  .chips { flex-direction: row; flex-wrap: wrap; }
+  .chip { font-size: 12px; }
+  .month-bar select { margin-left: 0; width: 100%; }
+}
+
 @media (max-width: 640px) {
   .list:not(.list-edit) th:nth-child(3), .list:not(.list-edit) td:nth-child(3) { display: none; }
   .row { flex-direction: column; gap: 0; }

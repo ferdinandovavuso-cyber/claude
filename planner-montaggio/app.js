@@ -36,6 +36,7 @@ function localStore() {
     async hasAccess() { return true; },
     async listClients() { return db.clients; },
     async listEvents() { return db.events; },
+    async listPublications() { return db.publications || []; },
     async saveClient(c) {
       const i = db.clients.findIndex((x) => x.id === c.id);
       if (i >= 0) db.clients[i] = c; else db.clients.push({ ...c, id: uid() });
@@ -95,6 +96,7 @@ async function supabaseStore() {
     async hasAccess() { return !!key && ok(await sb.rpc('has_planner_key')); },
     async listClients() { return ok(await sb.from('clients').select('*').order('name')); },
     async listEvents() { return ok(await sb.from('events').select('*').order('date', { ascending: false })); },
+    async listPublications() { return ok(await sb.from('publications').select('*').order('date')); },
     async saveClient(c) {
       const row = { ...c }; if (!row.id) delete row.id; delete row.created_at;
       ok(await sb.from('clients').upsert(row));
@@ -124,7 +126,9 @@ function compute(c, events) {
   const base = { c, edited, rawLeft, perWeek };
   if (perWeek === 0 || c.archived) return { ...base, status: 'paused' };
 
-  let stock = (c.initial_stock || 0) + edited;
+  // I post già programmati su Pubblie sono video montati e pronti.
+  const scheduled = state.publications.filter((p) => p.client_id === c.id && p.status === 'scheduled' && p.date >= c.start_date).length;
+  let stock = (c.initial_stock || 0) + edited + scheduled;
   let day = c.start_date;
   let lastCovered = null, gap = null, gapCovered = 0;
   for (let i = 0; i < 3650; i++) {
@@ -153,21 +157,22 @@ function compute(c, events) {
 
 // ---------- Stato app ----------
 let store;
-let state = { clients: [], events: [], view: 'scadenze' };
+let state = { clients: [], events: [], publications: [], view: 'scadenze', month: today().slice(0, 7), monthClient: '' };
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal');
 const $form = document.getElementById('modal-form');
 
 async function reload() {
-  const [clients, events] = await Promise.all([store.listClients(), store.listEvents()]);
+  const [clients, events, publications] = await Promise.all([store.listClients(), store.listEvents(), store.listPublications()]);
   state.clients = clients.map((c) => ({ ...c, schedule: (c.schedule || []).map(Number) }));
   state.events = events;
+  state.publications = publications;
   render();
 }
 
 function render() {
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
-  ({ scadenze: viewScadenze, calendario: viewCalendario, clienti: viewClienti, registro: viewRegistro })[state.view]();
+  ({ scadenze: viewScadenze, mese: viewMese, calendario: viewCalendario, clienti: viewClienti, registro: viewRegistro })[state.view]();
 }
 
 const statusLabel = { late: 'In ritardo', soon: 'Urgente', ok: 'In regola', paused: 'In pausa' };
@@ -245,6 +250,133 @@ function viewScadenze() {
     ${rows.some((r) => r.status === 'paused') ? `<p class="muted small">Clienti in pausa (nessun giorno di pubblicazione): ${rows.filter((r) => r.status === 'paused').map((r) => esc(r.c.name)).join(', ')}</p>` : ''}
   `;
   $app.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => openEventModal(b.dataset.id, b.dataset.act));
+}
+
+// ---------- Vista: Mese (pubblicazioni reali da Pubblie + uscite pianificate) ----------
+const MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+const PUB_LABEL = { published: 'Pubblicato', scheduled: 'Programmato su Pubblie', error: 'Errore di pubblicazione', partial: 'Pubblicato solo su alcuni canali', removed: 'Pubblicato, poi rimosso dai social' };
+const PUB_ICON = { published: '✓', scheduled: '⏱', error: '!', partial: '!', removed: '✕' };
+const PUBLISHED = ['published', 'partial', 'removed'];
+
+function shiftMonth(ym, n) {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+}
+
+function viewMese() {
+  const t = today();
+  const ym = state.month;
+  const [y, m] = ym.split('-').map(Number);
+  const first = `${ym}-01`;
+  const last = iso(new Date(y, m, 0));
+  const byId = Object.fromEntries(state.clients.map((c) => [c.id, c]));
+  const only = state.monthClient;
+  const inMonth = (d) => d >= first && d <= last;
+
+  const pubs = state.publications.filter((p) => inMonth(p.date) && (!only || p.client_id === only));
+  const coverage = Object.fromEntries(state.clients.filter((c) => !c.archived).map((c) => [c.id, compute(c, state.events)]));
+
+  // Uscite pianificate da oggi in poi: pronta se coperta, da montare se no.
+  const planned = (d) => {
+    if (d < t) return [];
+    return state.clients.filter((c) => !c.archived && c.schedule[weekday(d)] > 0 && (!only || c.id === only))
+      .filter((c) => !pubs.some((p) => p.client_id === c.id && p.date === d))
+      .map((c) => {
+        const r = coverage[c.id];
+        const ok = r.status !== 'paused' && (d < r.gap || (d === r.gap && r.gapCovered > 0));
+        return { c, ok };
+      });
+  };
+
+  const chip = (label, color, cls, title) =>
+    `<span class="chip ${cls}" title="${esc(title)}"><i style="background:${esc(color)}"></i><span class="chip-name">${esc(label)}</span></span>`;
+
+  const dayCell = (d) => {
+    const dayPubs = pubs.filter((p) => p.date === d);
+    const chips = [
+      ...dayPubs.map((p) => {
+        const c = byId[p.client_id];
+        return chip(c ? c.name : p.channel, c ? c.color : '#8b90a0', `pub ${p.status}${c ? '' : ' unmapped'}`,
+          `${c ? c.name : p.channel + ' (non collegato a un cliente)'} · ${PUB_LABEL[p.status]}${p.has_video ? '' : ' · foto, non video'}\n${p.excerpt || ''}`);
+      }),
+      ...planned(d).map(({ c, ok }) => chip(c.name, c.color, ok ? 'plan ready' : 'plan missing',
+        `${c.name} · uscita prevista · ${ok ? 'video pronto' : 'video da montare'}`)),
+    ];
+    const n = +d.slice(8);
+    return `<div class="day-cell ${d === t ? 'today' : ''} ${d < t ? 'past' : ''}">
+      <div class="day-num"><span class="dow">${parse(d).toLocaleDateString('it-IT', { weekday: 'short' })}</span>${n}</div>
+      <div class="chips">${chips.join('')}</div>
+    </div>`;
+  };
+
+  const lead = (weekday(first) + 6) % 7;
+  const days = [];
+  for (let d = first; d <= last; d = addDays(d, 1)) days.push(d);
+
+  // Riepilogo del mese per cliente: pubblicati contro contratto.
+  const rows = new Map();
+  for (const p of pubs) {
+    const key = p.client_id || `ch:${p.channel}`;
+    if (!rows.has(key)) rows.set(key, { c: byId[p.client_id], channel: p.channel, pub: 0, video: 0, sched: 0 });
+    const r = rows.get(key);
+    if (PUBLISHED.includes(p.status)) { r.pub++; if (p.has_video) r.video++; }
+    if (p.status === 'scheduled') r.sched++;
+  }
+  for (const c of state.clients) {
+    if (c.videos_per_month && !c.archived && !rows.has(c.id) && (!only || c.id === only)) rows.set(c.id, { c, pub: 0, video: 0, sched: 0 });
+  }
+  const summary = [...rows.values()].sort((a, b) => (b.c?.videos_per_month || 0) - (a.c?.videos_per_month || 0) || (a.c?.name || a.channel).localeCompare(b.c?.name || b.channel));
+  const hasData = state.publications.some((p) => inMonth(p.date));
+
+  $app.innerHTML = `
+    <div class="month-bar">
+      <button id="m-prev" aria-label="Mese precedente">‹</button>
+      <h2>${MONTHS[m - 1]} ${y}</h2>
+      <button id="m-next" aria-label="Mese successivo">›</button>
+      ${ym !== t.slice(0, 7) ? '<button id="m-today">Oggi</button>' : ''}
+      <select id="m-client" aria-label="Filtra cliente">
+        <option value="">Tutti i clienti</option>
+        ${[...state.clients].filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${c.id}" ${c.id === only ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="legend">
+      <span><b class="lg-i">✓</b>Pubblicato</span>
+      <span><b class="lg-i">⏱</b>Programmato su Pubblie</span>
+      <span><b class="lg-i warn">!</b>Errore o solo alcuni canali</span>
+      <span><i class="lg ready"></i>Uscita prevista, video pronto</span>
+      <span><i class="lg missing"></i>Uscita prevista, video da montare</span>
+    </div>
+    ${!hasData && last < t ? '<p class="muted small">Nessuna pubblicazione importata da Pubblie per questo mese.</p>' : ''}
+    <div class="month-grid">
+      ${['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'].map((d) => `<div class="dow-head">${d}</div>`).join('')}
+      ${'<div class="day-cell blank"></div>'.repeat(lead)}
+      ${days.map(dayCell).join('')}
+    </div>
+    ${summary.length ? `
+    <h3 class="section-title">Riepilogo di ${MONTHS[m - 1]}</h3>
+    <table class="list month-summary">
+      <thead><tr><th>Cliente</th><th class="num">Pubblicati</th><th class="num">Programmati</th><th class="num">Contratto</th><th>Esito</th></tr></thead>
+      <tbody>${summary.map((r) => {
+        const target = r.c?.videos_per_month;
+        const done = r.pub + r.sched;
+        const verdict = !target ? '<span class="muted">nessun contratto nel CRM</span>'
+          : done >= target ? '<span class="st ok">in linea</span>'
+          : `<span class="st warn">mancano ${target - done}</span>`;
+        return `<tr>
+          <td>${r.c ? dot(r.c.color) + esc(r.c.name) : `<span class="muted">${esc(r.channel)} · non collegato</span>`}</td>
+          <td class="num">${r.pub}${r.video < r.pub ? ` <span class="muted small">(${r.pub - r.video} foto)</span>` : ''}</td>
+          <td class="num">${r.sched || ''}</td>
+          <td class="num">${target || '—'}</td>
+          <td>${verdict}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>` : ''}`;
+
+  document.getElementById('m-prev').onclick = () => { state.month = shiftMonth(ym, -1); render(); };
+  document.getElementById('m-next').onclick = () => { state.month = shiftMonth(ym, 1); render(); };
+  document.getElementById('m-today')?.addEventListener('click', () => { state.month = t.slice(0, 7); render(); });
+  document.getElementById('m-client').onchange = (e) => { state.monthClient = e.target.value; render(); };
 }
 
 // ---------- Vista: Calendario (clienti × prossimi giorni) ----------
