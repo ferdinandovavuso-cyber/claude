@@ -34,6 +34,7 @@ function localStore() {
   return {
     mode: 'demo',
     async user() { return { email: 'demo' }; },
+    async isMember() { return true; },
     async listClients() { return db.clients; },
     async listEvents() { return db.events; },
     async saveClient(c) {
@@ -76,6 +77,7 @@ async function supabaseStore() {
     mode: 'cloud',
     sb,
     async user() { const { data } = await sb.auth.getUser(); return data.user; },
+    async isMember() { return ok(await sb.rpc('is_team_member')); },
     async listClients() { return ok(await sb.from('clients').select('*').order('name')); },
     async listEvents() { return ok(await sb.from('events').select('*').order('date', { ascending: false })); },
     async saveClient(c) {
@@ -401,6 +403,12 @@ function viewLogin(errorMsg = '') {
 async function start() {
   const user = await store.user();
   if (!user) return viewLogin();
+  if (!(await store.isMember())) {
+    document.getElementById('tabs').hidden = true;
+    $app.innerHTML = `<div class="empty">L'account <b>${esc(user.email)}</b> non è autorizzato. Chiedi a Ferdinando di aggiungerlo al team.<br><br><button id="logout2">Esci</button></div>`;
+    document.getElementById('logout2').onclick = () => store.signOut();
+    return;
+  }
   document.getElementById('tabs').hidden = false;
   const $user = document.getElementById('user');
   $user.innerHTML = store.mode === 'demo'
@@ -414,6 +422,10 @@ async function start() {
 document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => { state.view = b.dataset.view; render(); });
 
 (async () => {
-  store = CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY ? await supabaseStore() : localStore();
-  try { await start(); } catch (e) { $app.innerHTML = `<p class="alert">Errore: ${esc(e.message)}</p>`; }
+  try {
+    store = CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY ? await supabaseStore() : localStore();
+    await start();
+  } catch (e) {
+    $app.innerHTML = `<p class="alert">Errore di caricamento: ${esc(e.message)}. Controlla la connessione e ricarica la pagina.</p>`;
+  }
 })();

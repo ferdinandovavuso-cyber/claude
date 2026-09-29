@@ -1,6 +1,7 @@
-// Lascia vuoti i due campi per usare la modalità demo (dati salvati solo nel browser).
-// Per l'uso condiviso: crea un progetto Supabase, esegui schema.sql e incolla qui URL e anon key.
+// Progetto Supabase dedicato "fvl-montaggio" (separato dal CRM).
+// La chiave publishable può stare nel frontend: i dati sono protetti da RLS + lista team_members.
+// Svuota i due campi per tornare alla modalità demo (dati solo nel browser).
 export const CONFIG = {
-  SUPABASE_URL: '',
-  SUPABASE_ANON_KEY: '',
+  SUPABASE_URL: 'https://zumproecfjycxvymeovo.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_3t3kILOa0qZexywqgcG8JQ_jvRenSRk',
 };

@@ -20,14 +20,18 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 - **Clienti**: pianificazione delle uscite di ogni cliente.
 - **Registro**: storico delle registrazioni, per correggere gli errori.
 
-## Messa online (su un sottodominio di FVL Media)
+## Dove gira
 
-1. **Supabase**: crea un progetto e nel SQL Editor esegui `schema.sql`. Da *Authentication → Users* crea due utenti (tu e il montatore) con email e password. Da *Authentication → Providers → Email* disattiva le registrazioni pubbliche (*Allow new users to sign up*).
-2. **Config**: in `config.js` incolla `SUPABASE_URL` e la chiave `anon` (da *Project Settings → API*). La chiave anon può stare nel frontend: l'accesso ai dati è protetto dalle policy RLS e richiede il login.
-3. **Hosting**: pubblica la cartella `planner-montaggio/` su Netlify o Vercel come sito statico: non serve nessun passaggio di build.
-4. **Dominio**: aggiungi il sottodominio (es. `montaggio.fvlmedia.it`) nel progetto di hosting e crea il record CNAME che ti indica il provider.
+- **Database**: progetto Supabase `fvl-montaggio` (eu-west-1), separato da `fvl-core`. Separato apposta: su `fvl-core` quasi ogni tabella è aperta a qualsiasi utente loggato, e il montatore avrebbe visto tutto il CRM.
+- **Accesso**: login con email e password. Oltre al login serve che l'email sia in `team_members`: chi si registra da solo senza essere in lista vede 0 righe.
+- **Hosting**: progetto Vercel `fvl-montaggio`, dominio `montaggio.fvlmedia.it` (serve un CNAME verso `cname.vercel-dns.com` sul DNS di fvlmedia.it).
 
-Senza `config.js` compilato l'app gira in **modalità demo**: i dati restano solo nel browser. Serve per provarla, non per lavorarci in due.
+### Aggiungere una persona
+1. Supabase → progetto `fvl-montaggio` → *Authentication → Users → Add user* (email e password, spunta *Auto Confirm*).
+2. SQL Editor: `insert into public.team_members (email) values ('sua@email.it');`
+
+### Ripubblicare dopo una modifica
+Carica di nuovo i file di questa cartella sul progetto Vercel `fvl-montaggio`: non c'è nessun passaggio di build.
 
 ## Sviluppo locale
 
