@@ -37,6 +37,11 @@ La Edge Function `sync-pubblie` (codice in `supabase/functions/sync-pubblie/`) c
 ### Cambiare la chiave (se il link finisce nelle mani sbagliate)
 SQL Editor del progetto `fvl-montaggio`: `update public.planner_access set key = '<nuova-chiave>';` poi manda il nuovo link a chi deve usarlo.
 
+### Cosa si modifica dall'app (senza toccare il database)
+- **Clienti**: nome, colore, giorni di uscita, anticipo, pulsante Nascondi/Mostra.
+- **Dettagli** di un cliente: video al mese da contratto, account Pubblie collegati (uno per riga), video già pronti, grezzi, note.
+- **Canali Pubblie non collegati**: riquadro in cima a Clienti, si assegnano a un cliente con un menu.
+
 ### Ripubblicare dopo una modifica
 Fai push sul branch e crea un deployment Vercel dal commit (progetto `fvl-montaggio`, root directory `planner-montaggio`, nessun passaggio di build).
 

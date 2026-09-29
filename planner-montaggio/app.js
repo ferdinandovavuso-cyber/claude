@@ -45,6 +45,10 @@ function localStore() {
       save();
     },
     async patchClient(id, fields) { Object.assign(db.clients.find((c) => c.id === id), fields); save(); },
+    async assignChannel(channel, clientId) {
+      (db.publications || []).forEach((p) => { if (!p.client_id && p.channel === channel) p.client_id = clientId; });
+      save();
+    },
     async deleteClient(id) {
       db.clients = db.clients.filter((c) => c.id !== id);
       db.events = db.events.filter((e) => e.client_id !== id);
@@ -118,6 +122,7 @@ async function supabaseStore() {
       ok(await sb.from('clients').upsert(row));
     },
     async patchClient(id, fields) { ok(await sb.from('clients').update(fields).eq('id', id)); },
+    async assignChannel(channel, clientId) { ok(await sb.from('publications').update({ client_id: clientId }).eq('channel', channel).is('client_id', null)); },
     async deleteClient(id) { ok(await sb.from('clients').delete().eq('id', id)); },
     async addEvent(e) { ok(await sb.from('events').insert(e)); },
     async deleteEvent(id) { ok(await sb.from('events').delete().eq('id', id)); },
@@ -484,6 +489,7 @@ function viewClienti() {
       ${hiddenCount ? `<button id="toggle-hidden">${state.showHidden ? 'Solo visibili' : `Mostra nascosti (${hiddenCount})`}</button>` : ''}
       <button class="primary" id="add-client">+ Nuovo cliente</button>
     </div>
+    ${unmappedPanel()}
     <div class="table-wrap">
       <table class="list list-edit">
         <thead><tr><th>Cliente</th><th>Giorni di uscita</th><th title="Giorni di anticipo della consegna rispetto all'uscita">Anticipo</th><th>Ritmo</th><th></th></tr></thead>
@@ -541,6 +547,15 @@ function viewClienti() {
     }
     save(c, { [f]: inp.value });
   }));
+  $app.querySelectorAll('[data-assign]').forEach((sel) => sel.onchange = async () => {
+    if (!sel.value) return;
+    const c = state.clients.find((x) => x.id === sel.value);
+    const channel = sel.dataset.assign;
+    sel.disabled = true;
+    await store.patchClient(c.id, { pubblie_accounts: [...new Set([...(c.pubblie_accounts || []), channel])] });
+    await store.assignChannel(channel, c.id);
+    await reload();
+  });
   $app.querySelectorAll('[data-hide]').forEach((btn) => btn.onclick = () => {
     const c = state.clients.find((x) => x.id === btn.dataset.hide);
     save(c, { hidden: !c.hidden });
@@ -549,6 +564,23 @@ function viewClienti() {
   document.getElementById('toggle-hidden')?.addEventListener('click', () => { state.showHidden = !state.showHidden; viewClienti(); });
   document.getElementById('add-client').onclick = () => openClientModal();
   $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => openClientModal(state.clients.find((c) => c.id === b.dataset.edit)));
+}
+
+// Canali Pubblie con post ma senza cliente: si collegano da qui, senza passare dal database.
+function unmappedPanel() {
+  const counts = new Map();
+  for (const p of state.publications) if (!p.client_id) counts.set(p.channel, (counts.get(p.channel) || 0) + 1);
+  if (!counts.size) return '';
+  const options = [...state.clients].sort((a, b) => a.name.localeCompare(b.name))
+    .map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  return `<section class="unmapped">
+    <h3>Canali Pubblie non collegati</h3>
+    <p class="muted small">Hanno post ma nessun cliente. Scegli a chi appartengono: i post passano al cliente e le prossime sincronizzazioni lo riconoscono da sole.</p>
+    ${[...counts].map(([ch, n]) => `<div class="unmapped-row">
+      <span><b>${esc(ch)}</b> <span class="muted small">· ${n} post</span></span>
+      <select data-assign="${esc(ch)}"><option value="">Collega a…</option>${options}</select>
+    </div>`).join('')}
+  </section>`;
 }
 
 // ---------- Vista: Registro ----------
@@ -619,6 +651,10 @@ function openClientModal(c) {
       <label>Video già pronti a quella data<input name="initial_stock" type="number" min="0" value="${c.initial_stock}"></label>
       <label>Grezzi già in mano al montatore<input name="initial_raw" type="number" min="0" value="${c.initial_raw}"></label>
     </div>
+    <div class="row">
+      <label>Video al mese da contratto<input name="videos_per_month" type="number" min="0" max="200" value="${c.videos_per_month ?? ''}" placeholder="nessun contratto"></label>
+    </div>
+    <label>Account Pubblie collegati (uno per riga, nome esatto come su Pubblie)<textarea name="pubblie_accounts" rows="3" placeholder="es. Angelocar">${esc((c.pubblie_accounts || []).join('\n'))}</textarea></label>
     <label>Note<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
     <label class="check"><input name="hidden" type="checkbox" ${c.hidden ? 'checked' : ''}> Nascosto (non compare in scadenze e calendari, i dati restano)</label>
     <div class="actions right">
@@ -642,6 +678,8 @@ function openClientModal(c) {
       lead_days: Number(f.get('lead_days')) || 0, start_date: f.get('start_date'),
       initial_stock: Number(f.get('initial_stock')) || 0, initial_raw: Number(f.get('initial_raw')) || 0,
       notes: f.get('notes') || null, hidden: f.get('hidden') === 'on',
+      videos_per_month: f.get('videos_per_month') === '' ? null : Number(f.get('videos_per_month')),
+      pubblie_accounts: [...new Set(String(f.get('pubblie_accounts') || '').split('\n').map((x) => x.trim()).filter(Boolean))],
     });
     reload();
   };
