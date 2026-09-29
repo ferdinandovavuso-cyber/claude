@@ -17,7 +17,7 @@ create table if not exists public.clients (
   -- girato grezzo già consegnato al montatore e non ancora montato alla start_date
   initial_raw   int not null default 0,
   notes         text,
-  archived      boolean not null default false,
+  hidden        boolean not null default false, -- nascosto da scadenze e calendari, i dati restano
   created_at    timestamptz not null default now()
 );
 

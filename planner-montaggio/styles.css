@@ -113,7 +113,9 @@ main { padding: 16px; max-width: 1400px; margin: 0 auto; }
 .list { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .list th, .list td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; }
 .list th { color: var(--muted); font-weight: 500; font-size: 13px; }
-.list tr.archived { opacity: .55; }
+.list tr.hidden { opacity: .55; }
+.row-actions { white-space: nowrap; }
+.row-actions button + button { margin-left: 4px; }
 .empty { padding: 40px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius); }
 
 dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 20px; width: min(520px, calc(100vw - 32px)); }

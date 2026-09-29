@@ -61,7 +61,7 @@ function seed() {
   const start = addDays(t, -14);
   const mk = (name, color, schedule, stock, raw) => ({
     id: uid(), name, color, schedule, lead_days: 2, start_date: start,
-    initial_stock: stock, initial_raw: raw, notes: '', archived: false,
+    initial_stock: stock, initial_raw: raw, notes: '', hidden: false,
   });
   const clients = [
     mk('Ristorante Da Mario (esempio)', '#f59e0b', [0, 1, 0, 1, 0, 1, 0], 8, 12),
@@ -140,7 +140,7 @@ function compute(c, events) {
   const rawLeft = (c.initial_raw || 0) + raw - edited;
   const perWeek = c.schedule.reduce((a, b) => a + b, 0);
   const base = { c, edited, rawLeft, perWeek };
-  if (perWeek === 0 || c.archived) return { ...base, status: 'paused' };
+  if (perWeek === 0 || c.hidden) return { ...base, status: 'paused' };
 
   // I post già programmati su Pubblie sono video montati e pronti.
   const scheduled = state.publications.filter((p) => p.client_id === c.id && p.status === 'scheduled' && p.date >= c.start_date).length;
@@ -173,7 +173,7 @@ function compute(c, events) {
 
 // ---------- Stato app ----------
 let store;
-let state = { clients: [], events: [], publications: [], lastSync: null, view: 'scadenze', month: today().slice(0, 7), monthClient: '' };
+let state = { clients: [], events: [], publications: [], lastSync: null, view: 'scadenze', month: today().slice(0, 7), monthClient: '', showHidden: false };
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal');
 const $form = document.getElementById('modal-form');
@@ -198,7 +198,7 @@ const dot = (color) => `<span class="dot" style="background:${esc(color)}"></spa
 // ---------- Vista: Scadenze (la task list del montatore) ----------
 function viewScadenze() {
   const t = today();
-  const rows = state.clients.filter((c) => !c.archived).map((c) => compute(c, state.events));
+  const rows = state.clients.filter((c) => !c.hidden).map((c) => compute(c, state.events));
   const active = rows.filter((r) => r.status !== 'paused').sort((a, b) => a.deadline.localeCompare(b.deadline));
   const count = (s) => active.filter((r) => r.status === s).length;
   const weekEnd = addDays(t, 7);
@@ -291,13 +291,14 @@ function viewMese() {
   const only = state.monthClient;
   const inMonth = (d) => d >= first && d <= last;
 
-  const pubs = state.publications.filter((p) => inMonth(p.date) && (!only || p.client_id === only));
-  const coverage = Object.fromEntries(state.clients.filter((c) => !c.archived).map((c) => [c.id, compute(c, state.events)]));
+  const hiddenIds = new Set(state.clients.filter((c) => c.hidden).map((c) => c.id));
+  const pubs = state.publications.filter((p) => inMonth(p.date) && (only ? p.client_id === only : !hiddenIds.has(p.client_id)));
+  const coverage = Object.fromEntries(state.clients.filter((c) => !c.hidden).map((c) => [c.id, compute(c, state.events)]));
 
   // Uscite pianificate da oggi in poi: pronta se coperta, da montare se no.
   const planned = (d) => {
     if (d < t) return [];
-    return state.clients.filter((c) => !c.archived && c.schedule[weekday(d)] > 0 && (!only || c.id === only))
+    return state.clients.filter((c) => !c.hidden && c.schedule[weekday(d)] > 0 && (!only || c.id === only))
       .filter((c) => !pubs.some((p) => p.client_id === c.id && p.date === d))
       .map((c) => {
         const r = coverage[c.id];
@@ -341,7 +342,7 @@ function viewMese() {
     if (p.status === 'scheduled') r.sched++;
   }
   for (const c of state.clients) {
-    if (c.videos_per_month && !c.archived && !rows.has(c.id) && (!only || c.id === only)) rows.set(c.id, { c, pub: 0, video: 0, sched: 0 });
+    if (c.videos_per_month && !c.hidden && !rows.has(c.id) && (!only || c.id === only)) rows.set(c.id, { c, pub: 0, video: 0, sched: 0 });
   }
   const summary = [...rows.values()].sort((a, b) => (b.c?.videos_per_month || 0) - (a.c?.videos_per_month || 0) || (a.c?.name || a.channel).localeCompare(b.c?.name || b.channel));
   const hasData = state.publications.some((p) => inMonth(p.date));
@@ -356,7 +357,7 @@ function viewMese() {
       <button id="m-sync" ${store.mode === 'demo' ? 'hidden' : ''}>Aggiorna da Pubblie</button>
       <select id="m-client" aria-label="Filtra cliente">
         <option value="">Tutti i clienti</option>
-        ${[...state.clients].filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${c.id}" ${c.id === only ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        ${[...state.clients].filter((c) => !c.hidden).sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${c.id}" ${c.id === only ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
       </select>
     </div>
     <div class="legend">
@@ -424,7 +425,7 @@ function viewCalendario() {
   const t = today();
   const DAYS = 28;
   const days = Array.from({ length: DAYS }, (_, i) => addDays(t, i));
-  const rows = state.clients.filter((c) => !c.archived).map((c) => compute(c, state.events))
+  const rows = state.clients.filter((c) => !c.hidden).map((c) => compute(c, state.events))
     .sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
 
   const cell = (r, d) => {
@@ -468,9 +469,10 @@ const contractCheck = (c) => {
 const DAY_LETTERS = { 1: 'L', 2: 'M', 3: 'M', 4: 'G', 5: 'V', 6: 'S', 0: 'D' };
 
 function viewClienti() {
-  const rows = [...state.clients].sort((a, b) =>
-    a.archived - b.archived || (perWeek(a.schedule) === 0) - (perWeek(b.schedule) === 0) || a.name.localeCompare(b.name));
-  const unset = rows.filter((c) => !c.archived && !perWeek(c.schedule)).length;
+  const hiddenCount = state.clients.filter((c) => c.hidden).length;
+  const rows = state.clients.filter((c) => state.showHidden || !c.hidden).sort((a, b) =>
+    a.hidden - b.hidden || (perWeek(a.schedule) === 0) - (perWeek(b.schedule) === 0) || a.name.localeCompare(b.name));
+  const unset = rows.filter((c) => !c.hidden && !perWeek(c.schedule)).length;
   const status = (c) => {
     const k = contractCheck(c);
     return `<span class="st ${k.cls}">${k.text}</span>${k.hint ? `<span class="hint">${k.hint}</span>` : ''}`;
@@ -479,21 +481,26 @@ function viewClienti() {
     <div class="toolbar">
       <p class="muted small grow">${unset ? `<b>${unset} clienti da impostare.</b> Clicca i giorni in cui escono i video: finché non ne scegli almeno uno il cliente non compare nelle scadenze.` : 'Clicca i giorni per accenderli o spegnerli.'} Si salva da solo.</p>
       <span class="small muted" id="save-state"></span>
+      ${hiddenCount ? `<button id="toggle-hidden">${state.showHidden ? 'Solo visibili' : `Mostra nascosti (${hiddenCount})`}</button>` : ''}
       <button class="primary" id="add-client">+ Nuovo cliente</button>
     </div>
     <div class="table-wrap">
       <table class="list list-edit">
         <thead><tr><th>Cliente</th><th>Giorni di uscita</th><th title="Giorni di anticipo della consegna rispetto all'uscita">Anticipo</th><th>Ritmo</th><th></th></tr></thead>
         <tbody>${rows.map((c) => `
-          <tr class="${c.archived ? 'archived' : ''} ${perWeek(c.schedule) ? '' : 'unset'}" data-id="${c.id}">
+          <tr class="${c.hidden ? 'hidden' : ''} ${perWeek(c.schedule) ? '' : 'unset'}" data-id="${c.id}">
             <td class="name-cell"><div>
               <input type="color" data-f="color" value="${esc(c.color)}" aria-label="Colore">
               <input type="text" data-f="name" value="${esc(c.name)}" aria-label="Nome">
+              ${c.hidden ? '<span class="badge">nascosto</span>' : ''}
             </div></td>
             <td><div class="days">${WEEK.map(([i, l]) => `<button type="button" class="day ${c.schedule[i] ? 'on' : ''}" data-day="${i}" title="${l}${c.schedule[i] > 1 ? ` · ${c.schedule[i]} video` : ''}" aria-pressed="${!!c.schedule[i]}">${DAY_LETTERS[i]}${c.schedule[i] > 1 ? `<sup>${c.schedule[i]}</sup>` : ''}</button>`).join('')}</div></td>
             <td><div class="lead"><input type="number" min="0" max="30" data-f="lead_days" value="${c.lead_days}" aria-label="Anticipo"><span class="muted small">gg</span></div></td>
             <td class="status" data-status>${status(c)}</td>
-            <td class="right"><button data-edit="${c.id}">Dettagli</button></td>
+            <td class="right row-actions">
+              <button data-hide="${c.id}" title="${c.hidden ? 'Fallo tornare in scadenze e calendari' : 'Toglilo da scadenze e calendari, senza cancellare niente'}">${c.hidden ? 'Mostra' : 'Nascondi'}</button>
+              <button data-edit="${c.id}">Dettagli</button>
+            </td>
           </tr>`).join('')}</tbody>
       </table>
     </div>`;
@@ -534,6 +541,12 @@ function viewClienti() {
     }
     save(c, { [f]: inp.value });
   }));
+  $app.querySelectorAll('[data-hide]').forEach((btn) => btn.onclick = () => {
+    const c = state.clients.find((x) => x.id === btn.dataset.hide);
+    save(c, { hidden: !c.hidden });
+    viewClienti();
+  });
+  document.getElementById('toggle-hidden')?.addEventListener('click', () => { state.showHidden = !state.showHidden; viewClienti(); });
   document.getElementById('add-client').onclick = () => openClientModal();
   $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => openClientModal(state.clients.find((c) => c.id === b.dataset.edit)));
 }
@@ -587,7 +600,7 @@ function openEventModal(clientId, kind) {
 
 function openClientModal(c) {
   const isNew = !c;
-  c = c || { name: '', color: '#f59e0b', schedule: [0, 1, 0, 1, 0, 1, 0], lead_days: 2, start_date: today(), initial_stock: 0, initial_raw: 0, notes: '', archived: false };
+  c = c || { name: '', color: '#f59e0b', schedule: [0, 1, 0, 1, 0, 1, 0], lead_days: 2, start_date: today(), initial_stock: 0, initial_raw: 0, notes: '', hidden: false };
   $form.innerHTML = `
     <h3>${isNew ? 'Nuovo cliente' : 'Modifica cliente'}</h3>
     <div class="row">
@@ -607,7 +620,7 @@ function openClientModal(c) {
       <label>Grezzi già in mano al montatore<input name="initial_raw" type="number" min="0" value="${c.initial_raw}"></label>
     </div>
     <label>Note<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
-    <label class="check"><input name="archived" type="checkbox" ${c.archived ? 'checked' : ''}> Archiviato (non conta nelle scadenze)</label>
+    <label class="check"><input name="hidden" type="checkbox" ${c.hidden ? 'checked' : ''}> Nascosto (non compare in scadenze e calendari, i dati restano)</label>
     <div class="actions right">
       ${isNew ? '' : '<button value="delete" class="danger" formnovalidate>Elimina</button>'}
       <button value="cancel" formnovalidate>Annulla</button>
@@ -628,7 +641,7 @@ function openClientModal(c) {
       name: f.get('name').trim(), color: f.get('color'), schedule,
       lead_days: Number(f.get('lead_days')) || 0, start_date: f.get('start_date'),
       initial_stock: Number(f.get('initial_stock')) || 0, initial_raw: Number(f.get('initial_raw')) || 0,
-      notes: f.get('notes') || null, archived: f.get('archived') === 'on',
+      notes: f.get('notes') || null, hidden: f.get('hidden') === 'on',
     });
     reload();
   };
