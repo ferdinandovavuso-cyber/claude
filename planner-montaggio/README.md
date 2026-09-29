@@ -23,12 +23,12 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 ## Dove gira
 
 - **Database**: progetto Supabase `fvl-montaggio` (eu-west-1), separato da `fvl-core`. Separato apposta: su `fvl-core` quasi ogni tabella è aperta a qualsiasi utente loggato, e il montatore avrebbe visto tutto il CRM.
-- **Accesso**: login con email e password. Oltre al login serve che l'email sia in `team_members`: chi si registra da solo senza essere in lista vede 0 righe.
+- **Accesso**: niente login. Si entra con un link segreto `https://montaggio.fvlmedia.it/?k=<chiave>`: il browser si ricorda la chiave e la toglie dalla barra degli indirizzi. Senza chiave valida il database non restituisce nulla. Le chiavi valide stanno nella tabella `planner_access`.
 - **Hosting**: progetto Vercel `fvl-montaggio`, dominio `montaggio.fvlmedia.it` (serve un CNAME verso `cname.vercel-dns.com` sul DNS di fvlmedia.it).
+- **Clienti**: importati da `fvl-core.crm_clienti` (collegati con `crm_id`). `videos_per_month` viene dal campo `video_da_fare` del CRM.
 
-### Aggiungere una persona
-1. Supabase → progetto `fvl-montaggio` → *Authentication → Users → Add user* (email e password, spunta *Auto Confirm*).
-2. SQL Editor: `insert into public.team_members (email) values ('sua@email.it');`
+### Cambiare la chiave (se il link finisce nelle mani sbagliate)
+SQL Editor del progetto `fvl-montaggio`: `update public.planner_access set key = '<nuova-chiave>';` poi manda il nuovo link a chi deve usarlo.
 
 ### Ripubblicare dopo una modifica
 Carica di nuovo i file di questa cartella sul progetto Vercel `fvl-montaggio`: non c'è nessun passaggio di build.

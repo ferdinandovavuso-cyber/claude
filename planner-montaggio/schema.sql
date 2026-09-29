@@ -1,6 +1,6 @@
 -- Schema Supabase per il Planner Montaggio.
--- Esegui tutto nel SQL Editor del progetto, poi crea gli utenti (tu + montatore)
--- da Authentication > Users > "Add user" e aggiungi le loro email a team_members.
+-- Esegui tutto nel SQL Editor del progetto, poi inserisci una chiave in planner_access
+-- e condividi il link https://<dominio>/?k=<chiave>.
 
 create table if not exists public.clients (
   id            uuid primary key default gen_random_uuid(),
@@ -37,31 +37,35 @@ create index if not exists events_client_idx on public.events(client_id);
 alter table public.clients enable row level security;
 alter table public.events  enable row level security;
 
--- Lista delle email autorizzate: anche chi si registra da solo non vede nulla se non è qui.
--- Per aggiungere il montatore: insert into public.team_members (email) values ('sua@email.it');
-create table if not exists public.team_members (
-  email text primary key,
+-- Accesso con link segreto (niente login): l'app manda la chiave nell'header x-planner-key.
+-- Chi apre il sito senza chiave valida non vede e non modifica nulla.
+create table if not exists public.planner_access (
+  key text primary key,
+  label text,
   created_at timestamptz not null default now()
 );
-alter table public.team_members enable row level security; -- nessuna policy: solo da dashboard
+alter table public.planner_access enable row level security; -- nessuna policy: solo da dashboard
+-- insert into public.planner_access (key, label) values ('<chiave-lunga-casuale>', 'link team');
 
-create or replace function public.is_team_member()
+create or replace function public.has_planner_key()
 returns boolean language sql stable security definer set search_path = '' as $$
   select exists (
-    select 1 from public.team_members
-    where lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+    select 1 from public.planner_access
+    where key = coalesce(nullif(current_setting('request.headers', true), '')::json ->> 'x-planner-key', '')
   );
 $$;
-revoke all on function public.is_team_member() from public, anon;
-grant execute on function public.is_team_member() to authenticated;
+revoke all on function public.has_planner_key() from public;
+grant execute on function public.has_planner_key() to anon, authenticated;
 
-drop policy if exists team_clients on public.clients;
-create policy team_clients on public.clients for all to authenticated
-  using ((select public.is_team_member())) with check ((select public.is_team_member()));
+drop policy if exists planner_clients on public.clients;
+create policy planner_clients on public.clients for all to anon, authenticated
+  using ((select public.has_planner_key())) with check ((select public.has_planner_key()));
 
-drop policy if exists team_events on public.events;
-create policy team_events on public.events for all to authenticated
-  using ((select public.is_team_member())) with check ((select public.is_team_member()));
+drop policy if exists planner_events on public.events;
+create policy planner_events on public.events for all to anon, authenticated
+  using ((select public.has_planner_key())) with check ((select public.has_planner_key()));
 
--- Aggiornamento in tempo reale tra i due schermi.
-alter publication supabase_realtime add table public.clients, public.events;
+-- Collegamento al CRM (fvl-core.crm_clienti) e video al mese da contratto.
+alter table public.clients add column if not exists crm_id uuid unique;
+alter table public.clients add column if not exists videos_per_month int;
+

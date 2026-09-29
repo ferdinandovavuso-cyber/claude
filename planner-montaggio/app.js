@@ -33,8 +33,7 @@ function localStore() {
   save();
   return {
     mode: 'demo',
-    async user() { return { email: 'demo' }; },
-    async isMember() { return true; },
+    async hasAccess() { return true; },
     async listClients() { return db.clients; },
     async listEvents() { return db.events; },
     async saveClient(c) {
@@ -42,6 +41,7 @@ function localStore() {
       if (i >= 0) db.clients[i] = c; else db.clients.push({ ...c, id: uid() });
       save();
     },
+    async patchClient(id, fields) { Object.assign(db.clients.find((c) => c.id === id), fields); save(); },
     async deleteClient(id) {
       db.clients = db.clients.filter((c) => c.id !== id);
       db.events = db.events.filter((e) => e.client_id !== id);
@@ -50,7 +50,6 @@ function localStore() {
     async addEvent(e) { db.events.push({ ...e, id: uid(), created_at: new Date().toISOString() }); save(); },
     async deleteEvent(id) { db.events = db.events.filter((e) => e.id !== id); save(); },
     subscribe() {},
-    async signOut() {},
   };
 }
 
@@ -69,31 +68,46 @@ function seed() {
   return { clients, events: [] };
 }
 
+// La chiave arriva col link (?k=...), viene ricordata dal browser e tolta dalla barra degli indirizzi.
+function accessKey() {
+  const KEY = 'planner-montaggio-key';
+  const url = new URL(location.href);
+  const fromUrl = url.searchParams.get('k');
+  if (fromUrl) {
+    try { localStorage.setItem(KEY, fromUrl); } catch {}
+    url.searchParams.delete('k');
+    history.replaceState(null, '', url);
+    return fromUrl;
+  }
+  try { return localStorage.getItem(KEY); } catch { return null; }
+}
+
 async function supabaseStore() {
+  const key = accessKey();
   const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
-  const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+  const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { 'x-planner-key': key || '' } },
+  });
   const ok = ({ data, error }) => { if (error) throw error; return data; };
   return {
     mode: 'cloud',
-    sb,
-    async user() { const { data } = await sb.auth.getUser(); return data.user; },
-    async isMember() { return ok(await sb.rpc('is_team_member')); },
+    async hasAccess() { return !!key && ok(await sb.rpc('has_planner_key')); },
     async listClients() { return ok(await sb.from('clients').select('*').order('name')); },
     async listEvents() { return ok(await sb.from('events').select('*').order('date', { ascending: false })); },
     async saveClient(c) {
       const row = { ...c }; if (!row.id) delete row.id; delete row.created_at;
       ok(await sb.from('clients').upsert(row));
     },
+    async patchClient(id, fields) { ok(await sb.from('clients').update(fields).eq('id', id)); },
     async deleteClient(id) { ok(await sb.from('clients').delete().eq('id', id)); },
     async addEvent(e) { ok(await sb.from('events').insert(e)); },
     async deleteEvent(id) { ok(await sb.from('events').delete().eq('id', id)); },
+    // Senza login il realtime di Supabase non applica la chiave: aggiorno ogni minuto e quando si torna sulla scheda.
     subscribe(onChange) {
-      sb.channel('planner')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, onChange)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, onChange)
-        .subscribe();
+      setInterval(() => { if (!document.hidden && !$modal.open) onChange(); }, 60000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && !$modal.open) onChange(); });
     },
-    async signOut() { await sb.auth.signOut(); location.reload(); },
   };
 }
 
@@ -171,6 +185,10 @@ function viewScadenze() {
 
   if (!state.clients.length) {
     $app.innerHTML = `<div class="empty">Nessun cliente. Vai su <b>Clienti</b> e aggiungi il primo, con i suoi giorni di pubblicazione.</div>`;
+    return;
+  }
+  if (!active.length) {
+    $app.innerHTML = `<div class="empty">Nessun cliente ha ancora i giorni di uscita. Vai su <b>Clienti</b> e compila Lun–Dom: le scadenze compaiono qui appena ne imposti uno.</div>`;
     return;
   }
 
@@ -264,21 +282,74 @@ function viewCalendario() {
     </div>`;
 }
 
-// ---------- Vista: Clienti ----------
+// ---------- Vista: Clienti (modificabile direttamente in tabella) ----------
+const perMonth = (schedule) => Math.round(schedule.reduce((a, b) => a + b, 0) * 52 / 12);
+
 function viewClienti() {
+  const rows = [...state.clients].sort((a, b) => a.archived - b.archived || a.name.localeCompare(b.name));
+  const unset = rows.filter((c) => !c.archived && c.schedule.every((n) => !n)).length;
   $app.innerHTML = `
-    <div class="toolbar"><button class="primary" id="add-client">+ Nuovo cliente</button></div>
-    <table class="list">
-      <thead><tr><th>Cliente</th><th>Uscite/settimana</th><th>Giorni</th><th>Anticipo</th><th></th></tr></thead>
-      <tbody>${state.clients.map((c) => `
-        <tr class="${c.archived ? 'archived' : ''}">
-          <td>${dot(c.color)}${esc(c.name)}${c.archived ? ' <span class="muted">(archiviato)</span>' : ''}</td>
-          <td>${c.schedule.reduce((a, b) => a + b, 0)}</td>
-          <td>${WEEK.filter(([i]) => c.schedule[i] > 0).map(([i, l]) => c.schedule[i] > 1 ? `${l}×${c.schedule[i]}` : l).join(', ') || '—'}</td>
-          <td>${c.lead_days} gg</td>
-          <td class="right"><button data-edit="${c.id}">Modifica</button></td>
-        </tr>`).join('')}</tbody>
-    </table>`;
+    <div class="toolbar">
+      <p class="muted small grow">${unset ? `<b>${unset} clienti senza giorni di uscita</b>: finché sono vuoti restano in pausa e non compaiono nelle scadenze. ` : ''}Le modifiche si salvano da sole.</p>
+      <span class="small muted" id="save-state"></span>
+      <button class="primary" id="add-client">+ Nuovo cliente</button>
+    </div>
+    <div class="table-wrap">
+      <table class="list list-edit">
+        <thead><tr>
+          <th>Cliente</th>
+          ${WEEK.map(([, l]) => `<th class="num">${l}</th>`).join('')}
+          <th class="num" title="Giorni di anticipo della consegna rispetto all'uscita">Anticipo</th>
+          <th class="num" title="Uscite al mese calcolate dai giorni / video al mese da contratto (CRM)">Mese</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${rows.map((c) => {
+          const pm = perMonth(c.schedule);
+          const mismatch = c.videos_per_month && pm !== c.videos_per_month;
+          return `
+          <tr class="${c.archived ? 'archived' : ''}" data-id="${c.id}">
+            <td class="name-cell"><div>
+              <input type="color" data-f="color" value="${esc(c.color)}" aria-label="Colore">
+              <input type="text" data-f="name" value="${esc(c.name)}" aria-label="Nome">
+            </div></td>
+            ${WEEK.map(([i, l]) => `<td class="num"><input type="number" min="0" max="9" data-f="d${i}" value="${c.schedule[i] || 0}" aria-label="${l}"></td>`).join('')}
+            <td class="num"><input type="number" min="0" max="30" data-f="lead_days" value="${c.lead_days}" aria-label="Anticipo"></td>
+            <td class="num ${mismatch ? 'warn' : ''}" data-pm title="${mismatch ? 'Le uscite non tornano con i video da contratto' : ''}">${pm}${c.videos_per_month ? `<span class="muted">/${c.videos_per_month}</span>` : ''}</td>
+            <td class="right"><button data-edit="${c.id}">Dettagli</button></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+
+  const $state = document.getElementById('save-state');
+  const timers = {};
+  $app.querySelectorAll('.list-edit input').forEach((inp) => inp.addEventListener('change', () => {
+    const id = inp.closest('tr').dataset.id;
+    const c = state.clients.find((x) => x.id === id);
+    const f = inp.dataset.f;
+    let fields;
+    if (f.startsWith('d')) {
+      c.schedule[Number(f.slice(1))] = Math.max(0, Number(inp.value) || 0);
+      fields = { schedule: [...c.schedule] };
+      const cell = inp.closest('tr').querySelector('[data-pm]');
+      const pm = perMonth(c.schedule);
+      cell.classList.toggle('warn', !!c.videos_per_month && pm !== c.videos_per_month);
+      cell.innerHTML = `${pm}${c.videos_per_month ? `<span class="muted">/${c.videos_per_month}</span>` : ''}`;
+    } else if (f === 'lead_days') {
+      fields = { lead_days: Math.max(0, Number(inp.value) || 0) };
+    } else if (f === 'name') {
+      if (!inp.value.trim()) { inp.value = c.name; return; }
+      fields = { name: inp.value.trim() };
+    } else {
+      fields = { [f]: inp.value };
+    }
+    Object.assign(c, fields);
+    $state.textContent = 'Salvataggio…';
+    clearTimeout(timers[id]);
+    store.patchClient(id, fields)
+      .then(() => { $state.textContent = 'Salvato'; timers[id] = setTimeout(() => { $state.textContent = ''; }, 1500); })
+      .catch((e) => { $state.textContent = `Errore: ${e.message}`; });
+  }));
   document.getElementById('add-client').onclick = () => openClientModal();
   $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => openClientModal(state.clients.find((c) => c.id === b.dataset.edit)));
 }
@@ -322,10 +393,9 @@ function openEventModal(clientId, kind) {
   $modal.onclose = async () => {
     if ($modal.returnValue !== 'ok') return;
     const f = new FormData($form);
-    const user = await store.user();
     await store.addEvent({
       client_id: clientId, kind, qty: Number(f.get('qty')), date: f.get('date'),
-      note: f.get('note') || null, created_by: user?.email || null,
+      note: f.get('note') || null,
     });
     reload();
   };
@@ -380,42 +450,15 @@ function openClientModal(c) {
   };
 }
 
-// ---------- Login (solo in modalità cloud) ----------
-function viewLogin(errorMsg = '') {
-  document.getElementById('tabs').hidden = true;
-  $app.innerHTML = `
-    <form class="login" id="login">
-      <h2>Accedi</h2>
-      <label>Email<input name="email" type="email" required autocomplete="username"></label>
-      <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
-      ${errorMsg ? `<p class="alert">${esc(errorMsg)}</p>` : ''}
-      <button class="primary">Entra</button>
-    </form>`;
-  document.getElementById('login').onsubmit = async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const { error } = await store.sb.auth.signInWithPassword({ email: f.get('email'), password: f.get('password') });
-    if (error) return viewLogin('Credenziali non valide.');
-    start();
-  };
-}
-
 async function start() {
-  const user = await store.user();
-  if (!user) return viewLogin();
-  if (!(await store.isMember())) {
+  if (!(await store.hasAccess())) {
     document.getElementById('tabs').hidden = true;
-    $app.innerHTML = `<div class="empty">L'account <b>${esc(user.email)}</b> non è autorizzato. Chiedi a Ferdinando di aggiungerlo al team.<br><br><button id="logout2">Esci</button></div>`;
-    document.getElementById('logout2').onclick = () => store.signOut();
+    $app.innerHTML = `<div class="empty">Per aprire il planner serve il link completo. Chiedilo a Ferdinando.</div>`;
     return;
   }
-  document.getElementById('tabs').hidden = false;
-  const $user = document.getElementById('user');
-  $user.innerHTML = store.mode === 'demo'
-    ? `<span class="badge soon" title="I dati restano solo in questo browser">Demo locale</span>`
-    : `<span class="muted small">${esc(user.email)}</span> <button id="logout">Esci</button>`;
-  document.getElementById('logout')?.addEventListener('click', () => store.signOut());
-  store.subscribe(() => reload());
+  document.getElementById('user').innerHTML = store.mode === 'demo'
+    ? `<span class="badge soon" title="I dati restano solo in questo browser">Demo locale</span>` : '';
+  store.subscribe(() => { if (!document.activeElement?.closest('.list-edit')) reload(); });
   await reload();
 }
 
