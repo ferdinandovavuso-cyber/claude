@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planner Montaggio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%23f59e0b%22/%3E%3Cpath d=%22M9 8h14v3H9zM9 14h14v3H9zM9 20h9v3H9z%22 fill=%22%231a1204%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Planner Montaggio <span class="muted">· FVL Media</span></div>
+    <nav class="tabs" id="tabs">
+      <button data-view="scadenze" class="active">Scadenze</button>
+      <button data-view="calendario">Calendario</button>
+      <button data-view="clienti">Clienti</button>
+      <button data-view="registro">Registro</button>
+    </nav>
+    <div class="user" id="user"></div>
+  </header>
+
+  <main id="app"></main>
+
+  <dialog id="modal"><form method="dialog" id="modal-form"></form></dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

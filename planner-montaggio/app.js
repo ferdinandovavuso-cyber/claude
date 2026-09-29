@@ -1,0 +1,419 @@
+import { CONFIG } from './config.js';
+
+// ---------- Date (tutte come stringhe locali YYYY-MM-DD) ----------
+const pad = (n) => String(n).padStart(2, '0');
+const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parse = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return iso(d); };
+const weekday = (s) => parse(s).getDay();
+const diffDays = (a, b) => Math.round((parse(b) - parse(a)) / 86400000);
+const today = () => iso(new Date());
+const fmt = (s) => parse(s).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
+const fmtLong = (s) => parse(s).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
+
+// Se la consegna cade nel weekend, va anticipata al venerdì.
+const toWorkday = (s) => { let d = s; while ([0, 6].includes(weekday(d))) d = addDays(d, -1); return d; };
+
+// Ordine di visualizzazione Lun..Dom, mappato sugli indici JS (0 = domenica).
+const WEEK = [[1, 'Lun'], [2, 'Mar'], [3, 'Mer'], [4, 'Gio'], [5, 'Ven'], [6, 'Sab'], [0, 'Dom']];
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sum = (arr) => arr.reduce((a, e) => a + e.qty, 0);
+const uid = () => crypto.randomUUID();
+
+// ---------- Storage: Supabase se configurato, altrimenti localStorage (demo) ----------
+function localStore() {
+  const KEY = 'planner-montaggio-v1';
+  const load = () => {
+    try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch {}
+    return seed();
+  };
+  let db = load();
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} };
+  save();
+  return {
+    mode: 'demo',
+    async user() { return { email: 'demo' }; },
+    async listClients() { return db.clients; },
+    async listEvents() { return db.events; },
+    async saveClient(c) {
+      const i = db.clients.findIndex((x) => x.id === c.id);
+      if (i >= 0) db.clients[i] = c; else db.clients.push({ ...c, id: uid() });
+      save();
+    },
+    async deleteClient(id) {
+      db.clients = db.clients.filter((c) => c.id !== id);
+      db.events = db.events.filter((e) => e.client_id !== id);
+      save();
+    },
+    async addEvent(e) { db.events.push({ ...e, id: uid(), created_at: new Date().toISOString() }); save(); },
+    async deleteEvent(id) { db.events = db.events.filter((e) => e.id !== id); save(); },
+    subscribe() {},
+    async signOut() {},
+  };
+}
+
+function seed() {
+  const t = today();
+  const start = addDays(t, -14);
+  const mk = (name, color, schedule, stock, raw) => ({
+    id: uid(), name, color, schedule, lead_days: 2, start_date: start,
+    initial_stock: stock, initial_raw: raw, notes: '', archived: false,
+  });
+  const clients = [
+    mk('Ristorante Da Mario (esempio)', '#f59e0b', [0, 1, 0, 1, 0, 1, 0], 8, 12),
+    mk('Palestra FitLab (esempio)', '#22c55e', [0, 1, 1, 1, 1, 1, 0], 12, 24),
+    mk('Concessionaria Rossi (esempio)', '#3b82f6', [0, 0, 1, 0, 0, 1, 0], 3, 12),
+  ];
+  return { clients, events: [] };
+}
+
+async function supabaseStore() {
+  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+  const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+  const ok = ({ data, error }) => { if (error) throw error; return data; };
+  return {
+    mode: 'cloud',
+    sb,
+    async user() { const { data } = await sb.auth.getUser(); return data.user; },
+    async listClients() { return ok(await sb.from('clients').select('*').order('name')); },
+    async listEvents() { return ok(await sb.from('events').select('*').order('date', { ascending: false })); },
+    async saveClient(c) {
+      const row = { ...c }; if (!row.id) delete row.id; delete row.created_at;
+      ok(await sb.from('clients').upsert(row));
+    },
+    async deleteClient(id) { ok(await sb.from('clients').delete().eq('id', id)); },
+    async addEvent(e) { ok(await sb.from('events').insert(e)); },
+    async deleteEvent(id) { ok(await sb.from('events').delete().eq('id', id)); },
+    subscribe(onChange) {
+      sb.channel('planner')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, onChange)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, onChange)
+        .subscribe();
+    },
+    async signOut() { await sb.auth.signOut(); location.reload(); },
+  };
+}
+
+// ---------- Calcolo copertura ----------
+// Scorre i giorni dalla start_date consumando un video montato per ogni slot di pubblicazione.
+// Il primo slot che non si riesce a coprire è il "buco": la scadenza è lì meno i giorni di anticipo.
+function compute(c, events) {
+  const t = today();
+  const ev = events.filter((e) => e.client_id === c.id);
+  const edited = sum(ev.filter((e) => e.kind === 'edited'));
+  const raw = sum(ev.filter((e) => e.kind === 'raw'));
+  const rawLeft = (c.initial_raw || 0) + raw - edited;
+  const perWeek = c.schedule.reduce((a, b) => a + b, 0);
+  const base = { c, edited, rawLeft, perWeek };
+  if (perWeek === 0 || c.archived) return { ...base, status: 'paused' };
+
+  let stock = (c.initial_stock || 0) + edited;
+  let day = c.start_date;
+  let lastCovered = null, gap = null, gapCovered = 0;
+  for (let i = 0; i < 3650; i++) {
+    const n = c.schedule[weekday(day)];
+    if (n > 0) {
+      const cov = Math.min(n, stock);
+      stock -= cov;
+      if (cov === n) lastCovered = day;
+      if (cov < n) { gap = day; gapCovered = cov; break; }
+    }
+    day = addDays(day, 1);
+  }
+
+  const deadline = toWorkday(addDays(gap, -(c.lead_days || 0)));
+  const daysLeft = diffDays(t, deadline);
+  const status = daysLeft < 0 ? 'late' : daysLeft <= 2 ? 'soon' : 'ok';
+
+  // Quanti video servono per coprire le pubblicazioni fino a 14 giorni da oggi (almeno il prossimo buco).
+  const horizon = addDays(t, 14 + (c.lead_days || 0));
+  let need = 0;
+  for (let d = gap; d <= horizon; d = addDays(d, 1)) need += c.schedule[weekday(d)];
+  need = Math.max(need - gapCovered, c.schedule[weekday(gap)] - gapCovered);
+
+  return { ...base, lastCovered, gap, gapCovered, deadline, daysLeft, status, need, missedPublications: gap < t };
+}
+
+// ---------- Stato app ----------
+let store;
+let state = { clients: [], events: [], view: 'scadenze' };
+const $app = document.getElementById('app');
+const $modal = document.getElementById('modal');
+const $form = document.getElementById('modal-form');
+
+async function reload() {
+  const [clients, events] = await Promise.all([store.listClients(), store.listEvents()]);
+  state.clients = clients.map((c) => ({ ...c, schedule: (c.schedule || []).map(Number) }));
+  state.events = events;
+  render();
+}
+
+function render() {
+  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
+  ({ scadenze: viewScadenze, calendario: viewCalendario, clienti: viewClienti, registro: viewRegistro })[state.view]();
+}
+
+const statusLabel = { late: 'In ritardo', soon: 'Urgente', ok: 'In regola', paused: 'In pausa' };
+const dot = (color) => `<span class="dot" style="background:${esc(color)}"></span>`;
+
+// ---------- Vista: Scadenze (la task list del montatore) ----------
+function viewScadenze() {
+  const t = today();
+  const rows = state.clients.filter((c) => !c.archived).map((c) => compute(c, state.events));
+  const active = rows.filter((r) => r.status !== 'paused').sort((a, b) => a.deadline.localeCompare(b.deadline));
+  const count = (s) => active.filter((r) => r.status === s).length;
+  const weekEnd = addDays(t, 7);
+  const dueWeek = active.filter((r) => r.deadline <= weekEnd).reduce((a, r) => a + r.need, 0);
+  const rawAlerts = active.filter((r) => r.rawLeft < r.need);
+
+  if (!state.clients.length) {
+    $app.innerHTML = `<div class="empty">Nessun cliente. Vai su <b>Clienti</b> e aggiungi il primo, con i suoi giorni di pubblicazione.</div>`;
+    return;
+  }
+
+  // Raggruppa per data di consegna: così si vede subito il carico di ogni giorno.
+  const groups = new Map();
+  for (const r of active) {
+    const key = r.deadline < t ? 'late' : r.deadline;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+
+  const groupTitle = (key, list) => {
+    const vids = list.reduce((a, r) => a + r.need, 0);
+    if (key === 'late') return `In ritardo <span class="muted">· ${list.length} clienti · ${vids} video</span>`;
+    const d = diffDays(t, key);
+    const rel = d === 0 ? 'Oggi' : d === 1 ? 'Domani' : `Tra ${d} giorni`;
+    return `${rel} — ${fmtLong(key)} <span class="muted">· ${list.length} clienti · ${vids} video</span>`;
+  };
+
+  const card = (r) => `
+    <article class="card status-${r.status}">
+      <div class="card-head">
+        <div class="card-title">${dot(r.c.color)}${esc(r.c.name)}</div>
+        <span class="badge ${r.status}">${statusLabel[r.status]}</span>
+      </div>
+      <div class="facts">
+        <div><span class="k">Coperto fino a</span><span class="v">${r.lastCovered ? fmt(r.lastCovered) : '—'}</span></div>
+        <div><span class="k">Prima uscita scoperta</span><span class="v">${fmt(r.gap)}</span></div>
+        <div><span class="k">Consegna entro</span><span class="v strong">${fmt(r.deadline)}</span></div>
+        <div><span class="k">Da montare (14 gg)</span><span class="v strong">${r.need}</span></div>
+        <div><span class="k">Grezzi da montare</span><span class="v ${r.rawLeft < r.need ? 'warn' : ''}">${r.rawLeft}</span></div>
+      </div>
+      ${r.missedPublications ? `<p class="alert">Uscite già saltate dal ${fmt(r.gap)}. Se in realtà sono state pubblicate, correggi i dati iniziali del cliente.</p>` : ''}
+      ${r.rawLeft < r.need ? `<p class="alert">Mancano ${r.need - Math.max(r.rawLeft, 0)} video grezzi: il montatore non può coprire le prossime due settimane.</p>` : ''}
+      <div class="actions">
+        <button class="primary" data-act="edited" data-id="${r.c.id}">+ Ho montato</button>
+        <button data-act="raw" data-id="${r.c.id}">+ Grezzi consegnati</button>
+      </div>
+    </article>`;
+
+  $app.innerHTML = `
+    <section class="summary">
+      <div class="stat late"><b>${count('late')}</b><span>in ritardo</span></div>
+      <div class="stat soon"><b>${count('soon')}</b><span>urgenti (≤ 2 gg)</span></div>
+      <div class="stat ok"><b>${count('ok')}</b><span>in regola</span></div>
+      <div class="stat"><b>${dueWeek}</b><span>video da consegnare entro 7 gg</span></div>
+      <div class="stat ${rawAlerts.length ? 'late' : ''}"><b>${rawAlerts.length}</b><span>clienti senza girato sufficiente</span></div>
+    </section>
+    ${[...groups.entries()].map(([k, list]) => `
+      <section class="group">
+        <h2>${groupTitle(k, list)}</h2>
+        <div class="cards">${list.map(card).join('')}</div>
+      </section>`).join('')}
+    ${rows.some((r) => r.status === 'paused') ? `<p class="muted small">Clienti in pausa (nessun giorno di pubblicazione): ${rows.filter((r) => r.status === 'paused').map((r) => esc(r.c.name)).join(', ')}</p>` : ''}
+  `;
+  $app.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => openEventModal(b.dataset.id, b.dataset.act));
+}
+
+// ---------- Vista: Calendario (clienti × prossimi giorni) ----------
+function viewCalendario() {
+  const t = today();
+  const DAYS = 28;
+  const days = Array.from({ length: DAYS }, (_, i) => addDays(t, i));
+  const rows = state.clients.filter((c) => !c.archived).map((c) => compute(c, state.events))
+    .sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
+
+  const cell = (r, d) => {
+    const n = r.c.schedule[weekday(d)];
+    const isDeadline = r.deadline === d || (d === t && r.status === 'late');
+    let cls = '', label = '';
+    if (n > 0 && r.status !== 'paused') {
+      if (d < r.gap) { cls = 'covered'; label = n; }
+      else if (d === r.gap && r.gapCovered > 0) { cls = 'partial'; label = `${r.gapCovered}/${n}`; }
+      else { cls = 'missing'; label = n; }
+    }
+    return `<td class="${cls} ${isDeadline ? 'deadline' : ''} ${[0, 6].includes(weekday(d)) ? 'we' : ''}" title="${esc(r.c.name)} · ${fmt(d)}${n ? ` · ${n} uscit${n > 1 ? 'e' : 'a'}` : ''}${isDeadline ? ' · CONSEGNA' : ''}">${label}</td>`;
+  };
+
+  $app.innerHTML = `
+    <div class="legend">
+      <span><i class="lg covered"></i>Uscita coperta</span>
+      <span><i class="lg partial"></i>Parzialmente coperta</span>
+      <span><i class="lg missing"></i>Uscita scoperta</span>
+      <span><i class="lg deadline"></i>Giorno di consegna</span>
+    </div>
+    <div class="cal-wrap">
+      <table class="cal">
+        <thead><tr><th class="sticky">Cliente</th>${days.map((d) => `<th class="${d === t ? 'today' : ''} ${[0, 6].includes(weekday(d)) ? 'we' : ''}"><small>${parse(d).toLocaleDateString('it-IT', { weekday: 'narrow' })}</small><br>${parse(d).getDate()}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((r) => `<tr><th class="sticky">${dot(r.c.color)}${esc(r.c.name)}</th>${days.map((d) => cell(r, d)).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+// ---------- Vista: Clienti ----------
+function viewClienti() {
+  $app.innerHTML = `
+    <div class="toolbar"><button class="primary" id="add-client">+ Nuovo cliente</button></div>
+    <table class="list">
+      <thead><tr><th>Cliente</th><th>Uscite/settimana</th><th>Giorni</th><th>Anticipo</th><th></th></tr></thead>
+      <tbody>${state.clients.map((c) => `
+        <tr class="${c.archived ? 'archived' : ''}">
+          <td>${dot(c.color)}${esc(c.name)}${c.archived ? ' <span class="muted">(archiviato)</span>' : ''}</td>
+          <td>${c.schedule.reduce((a, b) => a + b, 0)}</td>
+          <td>${WEEK.filter(([i]) => c.schedule[i] > 0).map(([i, l]) => c.schedule[i] > 1 ? `${l}×${c.schedule[i]}` : l).join(', ') || '—'}</td>
+          <td>${c.lead_days} gg</td>
+          <td class="right"><button data-edit="${c.id}">Modifica</button></td>
+        </tr>`).join('')}</tbody>
+    </table>`;
+  document.getElementById('add-client').onclick = () => openClientModal();
+  $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => openClientModal(state.clients.find((c) => c.id === b.dataset.edit)));
+}
+
+// ---------- Vista: Registro ----------
+function viewRegistro() {
+  const byId = Object.fromEntries(state.clients.map((c) => [c.id, c]));
+  const ev = [...state.events].sort((a, b) => (b.date + (b.created_at || '')).localeCompare(a.date + (a.created_at || ''))).slice(0, 200);
+  $app.innerHTML = ev.length ? `
+    <table class="list">
+      <thead><tr><th>Data</th><th>Cliente</th><th>Tipo</th><th>Qtà</th><th>Nota</th><th></th></tr></thead>
+      <tbody>${ev.map((e) => `
+        <tr>
+          <td>${fmt(e.date)}</td>
+          <td>${byId[e.client_id] ? dot(byId[e.client_id].color) + esc(byId[e.client_id].name) : '—'}</td>
+          <td>${e.kind === 'edited' ? 'Montati' : 'Grezzi ricevuti'}</td>
+          <td>${e.qty}</td>
+          <td class="muted">${esc(e.note)}${e.created_by ? ` <small>· ${esc(e.created_by)}</small>` : ''}</td>
+          <td class="right"><button class="danger" data-del="${e.id}">Elimina</button></td>
+        </tr>`).join('')}</tbody>
+    </table>` : `<div class="empty">Ancora nessuna registrazione.</div>`;
+  $app.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Eliminare questa registrazione?')) return;
+    await store.deleteEvent(b.dataset.del); reload();
+  });
+}
+
+// ---------- Modali ----------
+function openEventModal(clientId, kind) {
+  const c = state.clients.find((x) => x.id === clientId);
+  $form.innerHTML = `
+    <h3>${kind === 'edited' ? 'Video montati' : 'Grezzi consegnati'} — ${esc(c.name)}</h3>
+    <label>Quantità<input name="qty" type="number" min="1" value="1" required autofocus></label>
+    <label>Data<input name="date" type="date" value="${today()}" required></label>
+    <label>Nota (facoltativa)<input name="note" type="text" placeholder="${kind === 'edited' ? 'es. reel promo autunno' : 'es. blocco da 12 di ottobre'}"></label>
+    <div class="actions right">
+      <button value="cancel" formnovalidate>Annulla</button>
+      <button value="ok" class="primary">Salva</button>
+    </div>`;
+  $modal.showModal();
+  $modal.onclose = async () => {
+    if ($modal.returnValue !== 'ok') return;
+    const f = new FormData($form);
+    const user = await store.user();
+    await store.addEvent({
+      client_id: clientId, kind, qty: Number(f.get('qty')), date: f.get('date'),
+      note: f.get('note') || null, created_by: user?.email || null,
+    });
+    reload();
+  };
+}
+
+function openClientModal(c) {
+  const isNew = !c;
+  c = c || { name: '', color: '#f59e0b', schedule: [0, 1, 0, 1, 0, 1, 0], lead_days: 2, start_date: today(), initial_stock: 0, initial_raw: 0, notes: '', archived: false };
+  $form.innerHTML = `
+    <h3>${isNew ? 'Nuovo cliente' : 'Modifica cliente'}</h3>
+    <div class="row">
+      <label class="grow">Nome<input name="name" value="${esc(c.name)}" required></label>
+      <label>Colore<input name="color" type="color" value="${esc(c.color)}"></label>
+    </div>
+    <fieldset>
+      <legend>Video pubblicati per giorno</legend>
+      <div class="week">${WEEK.map(([i, l]) => `<label>${l}<input name="d${i}" type="number" min="0" max="9" value="${c.schedule[i] || 0}"></label>`).join('')}</div>
+    </fieldset>
+    <div class="row">
+      <label>Anticipo consegna (giorni)<input name="lead_days" type="number" min="0" max="30" value="${c.lead_days}"></label>
+      <label>Conta dal<input name="start_date" type="date" value="${c.start_date}" required></label>
+    </div>
+    <div class="row">
+      <label>Video già pronti a quella data<input name="initial_stock" type="number" min="0" value="${c.initial_stock}"></label>
+      <label>Grezzi già in mano al montatore<input name="initial_raw" type="number" min="0" value="${c.initial_raw}"></label>
+    </div>
+    <label>Note<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
+    <label class="check"><input name="archived" type="checkbox" ${c.archived ? 'checked' : ''}> Archiviato (non conta nelle scadenze)</label>
+    <div class="actions right">
+      ${isNew ? '' : '<button value="delete" class="danger" formnovalidate>Elimina</button>'}
+      <button value="cancel" formnovalidate>Annulla</button>
+      <button value="ok" class="primary">Salva</button>
+    </div>`;
+  $modal.showModal();
+  $modal.onclose = async () => {
+    const v = $modal.returnValue;
+    if (v === 'delete') {
+      if (confirm(`Eliminare ${c.name} e tutto il suo storico?`)) { await store.deleteClient(c.id); reload(); }
+      return;
+    }
+    if (v !== 'ok') return;
+    const f = new FormData($form);
+    const schedule = [0, 1, 2, 3, 4, 5, 6].map((i) => Number(f.get(`d${i}`)) || 0);
+    await store.saveClient({
+      ...(isNew ? {} : { id: c.id }),
+      name: f.get('name').trim(), color: f.get('color'), schedule,
+      lead_days: Number(f.get('lead_days')) || 0, start_date: f.get('start_date'),
+      initial_stock: Number(f.get('initial_stock')) || 0, initial_raw: Number(f.get('initial_raw')) || 0,
+      notes: f.get('notes') || null, archived: f.get('archived') === 'on',
+    });
+    reload();
+  };
+}
+
+// ---------- Login (solo in modalità cloud) ----------
+function viewLogin(errorMsg = '') {
+  document.getElementById('tabs').hidden = true;
+  $app.innerHTML = `
+    <form class="login" id="login">
+      <h2>Accedi</h2>
+      <label>Email<input name="email" type="email" required autocomplete="username"></label>
+      <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+      ${errorMsg ? `<p class="alert">${esc(errorMsg)}</p>` : ''}
+      <button class="primary">Entra</button>
+    </form>`;
+  document.getElementById('login').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const { error } = await store.sb.auth.signInWithPassword({ email: f.get('email'), password: f.get('password') });
+    if (error) return viewLogin('Credenziali non valide.');
+    start();
+  };
+}
+
+async function start() {
+  const user = await store.user();
+  if (!user) return viewLogin();
+  document.getElementById('tabs').hidden = false;
+  const $user = document.getElementById('user');
+  $user.innerHTML = store.mode === 'demo'
+    ? `<span class="badge soon" title="I dati restano solo in questo browser">Demo locale</span>`
+    : `<span class="muted small">${esc(user.email)}</span> <button id="logout">Esci</button>`;
+  document.getElementById('logout')?.addEventListener('click', () => store.signOut());
+  store.subscribe(() => reload());
+  await reload();
+}
+
+document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => { state.view = b.dataset.view; render(); });
+
+(async () => {
+  store = CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY ? await supabaseStore() : localStore();
+  try { await start(); } catch (e) { $app.innerHTML = `<p class="alert">Errore: ${esc(e.message)}</p>`; }
+})();
