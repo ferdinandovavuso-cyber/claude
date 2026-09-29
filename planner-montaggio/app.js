@@ -37,6 +37,8 @@ function localStore() {
     async listClients() { return db.clients; },
     async listEvents() { return db.events; },
     async listPublications() { return db.publications || []; },
+    async lastSync() { return null; },
+    async syncNow() { throw new Error('Non disponibile in modalità demo'); },
     async saveClient(c) {
       const i = db.clients.findIndex((x) => x.id === c.id);
       if (i >= 0) db.clients[i] = c; else db.clients.push({ ...c, id: uid() });
@@ -97,6 +99,20 @@ async function supabaseStore() {
     async listClients() { return ok(await sb.from('clients').select('*').order('name')); },
     async listEvents() { return ok(await sb.from('events').select('*').order('date', { ascending: false })); },
     async listPublications() { return ok(await sb.from('publications').select('*').order('date')); },
+    async lastSync() {
+      return ok(await sb.from('sync_runs').select('*').not('finished_at', 'is', null).order('started_at', { ascending: false }).limit(1))[0] || null;
+    },
+    // Lancia la sincronizzazione con Pubblie (Edge Function sync-pubblie), autorizzata dalla stessa chiave del link.
+    async syncNow() {
+      const res = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/sync-pubblie`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-planner-key': key || '' },
+        body: '{}',
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || !out.ok) throw new Error(out.error || `HTTP ${res.status}`);
+      return out;
+    },
     async saveClient(c) {
       const row = { ...c }; if (!row.id) delete row.id; delete row.created_at;
       ok(await sb.from('clients').upsert(row));
@@ -157,13 +173,14 @@ function compute(c, events) {
 
 // ---------- Stato app ----------
 let store;
-let state = { clients: [], events: [], publications: [], view: 'scadenze', month: today().slice(0, 7), monthClient: '' };
+let state = { clients: [], events: [], publications: [], lastSync: null, view: 'scadenze', month: today().slice(0, 7), monthClient: '' };
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal');
 const $form = document.getElementById('modal-form');
 
 async function reload() {
-  const [clients, events, publications] = await Promise.all([store.listClients(), store.listEvents(), store.listPublications()]);
+  const [clients, events, publications, lastSync] = await Promise.all([store.listClients(), store.listEvents(), store.listPublications(), store.lastSync()]);
+  state.lastSync = lastSync;
   state.clients = clients.map((c) => ({ ...c, schedule: (c.schedule || []).map(Number) }));
   state.events = events;
   state.publications = publications;
@@ -335,6 +352,8 @@ function viewMese() {
       <h2>${MONTHS[m - 1]} ${y}</h2>
       <button id="m-next" aria-label="Mese successivo">›</button>
       ${ym !== t.slice(0, 7) ? '<button id="m-today">Oggi</button>' : ''}
+      <span class="sync-info small muted" id="sync-info">${syncLabel()}</span>
+      <button id="m-sync" ${store.mode === 'demo' ? 'hidden' : ''}>Aggiorna da Pubblie</button>
       <select id="m-client" aria-label="Filtra cliente">
         <option value="">Tutti i clienti</option>
         ${[...state.clients].filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${c.id}" ${c.id === only ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
@@ -377,6 +396,27 @@ function viewMese() {
   document.getElementById('m-next').onclick = () => { state.month = shiftMonth(ym, 1); render(); };
   document.getElementById('m-today')?.addEventListener('click', () => { state.month = t.slice(0, 7); render(); });
   document.getElementById('m-client').onchange = (e) => { state.monthClient = e.target.value; render(); };
+  document.getElementById('m-sync').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Aggiorno…';
+    try {
+      await store.syncNow();
+      await reload();
+    } catch (err) {
+      document.getElementById('sync-info').innerHTML = `<span class="st warn">Aggiornamento fallito: ${esc(err.message)}</span>`;
+      btn.disabled = false;
+      btn.textContent = 'Aggiorna da Pubblie';
+    }
+  };
+}
+
+function syncLabel() {
+  const r = state.lastSync;
+  if (!r) return store.mode === 'demo' ? '' : 'Pubblie: mai sincronizzato';
+  const when = new Date(r.finished_at).toLocaleString('it-IT', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  if (!r.ok) return `<span class="st warn" title="${esc(r.error)}">Pubblie: errore ${when}</span>`;
+  return `Pubblie aggiornato ${when}${r.unmapped?.length ? ` · <span title="${esc(r.unmapped.join(', '))}">${r.unmapped.length} canali non collegati</span>` : ''}`;
 }
 
 // ---------- Vista: Calendario (clienti × prossimi giorni) ----------

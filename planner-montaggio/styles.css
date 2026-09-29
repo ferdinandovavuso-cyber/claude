@@ -131,7 +131,8 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 
 .month-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .month-bar h2 { margin: 0 8px; font-size: 20px; text-transform: capitalize; min-width: 170px; text-align: center; }
-.month-bar select { margin-left: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; }
+.sync-info { margin-left: auto; }
+.month-bar select { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; }
 .lg-i { display: inline-block; width: 16px; text-align: center; margin-right: 4px; color: var(--ok); }
 .lg-i.warn { color: var(--late); }
 .lg.ready { border: 1.5px solid var(--ok); }
@@ -169,7 +170,8 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
   .day-cell.past:not(:has(.chip)) { display: none; }
   .chips { flex-direction: row; flex-wrap: wrap; }
   .chip { font-size: 12px; }
-  .month-bar select { margin-left: 0; width: 100%; }
+  .month-bar select { width: 100%; }
+  .sync-info { margin-left: 0; flex-basis: 100%; }
 }
 
 @media (max-width: 640px) {

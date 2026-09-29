@@ -27,6 +27,13 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 - **Hosting**: progetto Vercel `fvl-montaggio`, dominio `montaggio.fvlmedia.it` (serve un CNAME verso `cname.vercel-dns.com` sul DNS di fvlmedia.it).
 - **Clienti**: importati da `fvl-core.crm_clienti` (collegati con `crm_id`). `videos_per_month` viene dal campo `video_da_fare` del CRM.
 
+### Sincronizzazione con Pubblie (zero token)
+La Edge Function `sync-pubblie` (codice in `supabase/functions/sync-pubblie/`) chiama direttamente il server MCP di Pubblie, senza nessun modello AI, e aggiorna la tabella `publications`: ultimi 7 giorni e prossimi 60.
+- Parte da sola ogni 2 ore (job `pg_cron` "sync-pubblie") e dal pulsante **Aggiorna da Pubblie** nella vista Mese.
+- Servono due secret in Supabase → Edge Functions → Secrets: `PUBBLIE_MCP_URL` e `PUBBLIE_MCP_TOKEN`.
+- I post vengono abbinati ai clienti tramite `clients.pubblie_accounts` (nomi esatti degli account su Pubblie). I canali senza cliente compaiono in grigio.
+- L'esito di ogni giro è in `sync_runs`.
+
 ### Cambiare la chiave (se il link finisce nelle mani sbagliate)
 SQL Editor del progetto `fvl-montaggio`: `update public.planner_access set key = '<nuova-chiave>';` poi manda il nuovo link a chi deve usarlo.
 
