@@ -31,7 +31,7 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 SQL Editor del progetto `fvl-montaggio`: `update public.planner_access set key = '<nuova-chiave>';` poi manda il nuovo link a chi deve usarlo.
 
 ### Ripubblicare dopo una modifica
-Carica di nuovo i file di questa cartella sul progetto Vercel `fvl-montaggio`: non c'è nessun passaggio di build.
+Fai push sul branch e crea un deployment Vercel dal commit (progetto `fvl-montaggio`, root directory `planner-montaggio`, nessun passaggio di build).
 
 ## Sviluppo locale
 
