@@ -283,72 +283,84 @@ function viewCalendario() {
 }
 
 // ---------- Vista: Clienti (modificabile direttamente in tabella) ----------
-const perMonth = (schedule) => Math.round(schedule.reduce((a, b) => a + b, 0) * 52 / 12);
+const perWeek = (schedule) => schedule.reduce((a, b) => a + b, 0);
+// Il contratto è "N video al mese": va bene se le uscite settimanali distano meno di 1 dal ritmo del contratto.
+const contractCheck = (c) => {
+  const w = perWeek(c.schedule);
+  if (!w) return { cls: 'todo', text: 'Da impostare' };
+  if (!c.videos_per_month) return { cls: '', text: `${w} a settimana` };
+  const target = c.videos_per_month * 12 / 52;
+  const ok = Math.abs(w - target) < 1;
+  return { cls: ok ? 'ok' : 'warn', text: `${w} a settimana`, hint: `contratto ${c.videos_per_month}/mese ≈ ${Math.round(target)} a settimana` };
+};
+const DAY_LETTERS = { 1: 'L', 2: 'M', 3: 'M', 4: 'G', 5: 'V', 6: 'S', 0: 'D' };
 
 function viewClienti() {
-  const rows = [...state.clients].sort((a, b) => a.archived - b.archived || a.name.localeCompare(b.name));
-  const unset = rows.filter((c) => !c.archived && c.schedule.every((n) => !n)).length;
+  const rows = [...state.clients].sort((a, b) =>
+    a.archived - b.archived || (perWeek(a.schedule) === 0) - (perWeek(b.schedule) === 0) || a.name.localeCompare(b.name));
+  const unset = rows.filter((c) => !c.archived && !perWeek(c.schedule)).length;
+  const status = (c) => {
+    const k = contractCheck(c);
+    return `<span class="st ${k.cls}">${k.text}</span>${k.hint ? `<span class="hint">${k.hint}</span>` : ''}`;
+  };
   $app.innerHTML = `
     <div class="toolbar">
-      <p class="muted small grow">${unset ? `<b>${unset} clienti senza giorni di uscita</b>: finché sono vuoti restano in pausa e non compaiono nelle scadenze. ` : ''}Le modifiche si salvano da sole.</p>
+      <p class="muted small grow">${unset ? `<b>${unset} clienti da impostare.</b> Clicca i giorni in cui escono i video: finché non ne scegli almeno uno il cliente non compare nelle scadenze.` : 'Clicca i giorni per accenderli o spegnerli.'} Si salva da solo.</p>
       <span class="small muted" id="save-state"></span>
       <button class="primary" id="add-client">+ Nuovo cliente</button>
     </div>
     <div class="table-wrap">
       <table class="list list-edit">
-        <thead><tr>
-          <th>Cliente</th>
-          ${WEEK.map(([, l]) => `<th class="num">${l}</th>`).join('')}
-          <th class="num" title="Giorni di anticipo della consegna rispetto all'uscita">Anticipo</th>
-          <th class="num" title="Uscite al mese calcolate dai giorni / video al mese da contratto (CRM)">Mese</th>
-          <th></th>
-        </tr></thead>
-        <tbody>${rows.map((c) => {
-          const pm = perMonth(c.schedule);
-          const mismatch = c.videos_per_month && pm !== c.videos_per_month;
-          return `
-          <tr class="${c.archived ? 'archived' : ''}" data-id="${c.id}">
+        <thead><tr><th>Cliente</th><th>Giorni di uscita</th><th title="Giorni di anticipo della consegna rispetto all'uscita">Anticipo</th><th>Ritmo</th><th></th></tr></thead>
+        <tbody>${rows.map((c) => `
+          <tr class="${c.archived ? 'archived' : ''} ${perWeek(c.schedule) ? '' : 'unset'}" data-id="${c.id}">
             <td class="name-cell"><div>
               <input type="color" data-f="color" value="${esc(c.color)}" aria-label="Colore">
               <input type="text" data-f="name" value="${esc(c.name)}" aria-label="Nome">
             </div></td>
-            ${WEEK.map(([i, l]) => `<td class="num"><input type="number" min="0" max="9" data-f="d${i}" value="${c.schedule[i] || 0}" aria-label="${l}"></td>`).join('')}
-            <td class="num"><input type="number" min="0" max="30" data-f="lead_days" value="${c.lead_days}" aria-label="Anticipo"></td>
-            <td class="num ${mismatch ? 'warn' : ''}" data-pm title="${mismatch ? 'Le uscite non tornano con i video da contratto' : ''}">${pm}${c.videos_per_month ? `<span class="muted">/${c.videos_per_month}</span>` : ''}</td>
+            <td><div class="days">${WEEK.map(([i, l]) => `<button type="button" class="day ${c.schedule[i] ? 'on' : ''}" data-day="${i}" title="${l}${c.schedule[i] > 1 ? ` · ${c.schedule[i]} video` : ''}" aria-pressed="${!!c.schedule[i]}">${DAY_LETTERS[i]}${c.schedule[i] > 1 ? `<sup>${c.schedule[i]}</sup>` : ''}</button>`).join('')}</div></td>
+            <td><div class="lead"><input type="number" min="0" max="30" data-f="lead_days" value="${c.lead_days}" aria-label="Anticipo"><span class="muted small">gg</span></div></td>
+            <td class="status" data-status>${status(c)}</td>
             <td class="right"><button data-edit="${c.id}">Dettagli</button></td>
-          </tr>`;
-        }).join('')}</tbody>
+          </tr>`).join('')}</tbody>
       </table>
     </div>`;
 
   const $state = document.getElementById('save-state');
-  const timers = {};
-  $app.querySelectorAll('.list-edit input').forEach((inp) => inp.addEventListener('change', () => {
-    const id = inp.closest('tr').dataset.id;
-    const c = state.clients.find((x) => x.id === id);
-    const f = inp.dataset.f;
-    let fields;
-    if (f.startsWith('d')) {
-      c.schedule[Number(f.slice(1))] = Math.max(0, Number(inp.value) || 0);
-      fields = { schedule: [...c.schedule] };
-      const cell = inp.closest('tr').querySelector('[data-pm]');
-      const pm = perMonth(c.schedule);
-      cell.classList.toggle('warn', !!c.videos_per_month && pm !== c.videos_per_month);
-      cell.innerHTML = `${pm}${c.videos_per_month ? `<span class="muted">/${c.videos_per_month}</span>` : ''}`;
-    } else if (f === 'lead_days') {
-      fields = { lead_days: Math.max(0, Number(inp.value) || 0) };
-    } else if (f === 'name') {
-      if (!inp.value.trim()) { inp.value = c.name; return; }
-      fields = { name: inp.value.trim() };
-    } else {
-      fields = { [f]: inp.value };
-    }
+  let timer;
+  const save = (c, fields) => {
     Object.assign(c, fields);
     $state.textContent = 'Salvataggio…';
-    clearTimeout(timers[id]);
-    store.patchClient(id, fields)
-      .then(() => { $state.textContent = 'Salvato'; timers[id] = setTimeout(() => { $state.textContent = ''; }, 1500); })
+    clearTimeout(timer);
+    store.patchClient(c.id, fields)
+      .then(() => { $state.textContent = 'Salvato'; timer = setTimeout(() => { $state.textContent = ''; }, 1500); })
       .catch((e) => { $state.textContent = `Errore: ${e.message}`; });
+  };
+  const clientOf = (el) => state.clients.find((x) => x.id === el.closest('tr').dataset.id);
+
+  $app.querySelectorAll('.day').forEach((btn) => btn.addEventListener('click', () => {
+    const c = clientOf(btn);
+    const i = Number(btn.dataset.day);
+    const schedule = [...c.schedule];
+    schedule[i] = schedule[i] ? 0 : 1;
+    btn.classList.toggle('on', !!schedule[i]);
+    btn.setAttribute('aria-pressed', String(!!schedule[i]));
+    btn.innerHTML = DAY_LETTERS[i];
+    const tr = btn.closest('tr');
+    save(c, { schedule });
+    tr.classList.toggle('unset', !perWeek(schedule));
+    tr.querySelector('[data-status]').innerHTML = status(c);
+  }));
+
+  $app.querySelectorAll('.list-edit input').forEach((inp) => inp.addEventListener('change', () => {
+    const c = clientOf(inp);
+    const f = inp.dataset.f;
+    if (f === 'lead_days') return save(c, { lead_days: Math.max(0, Number(inp.value) || 0) });
+    if (f === 'name') {
+      if (!inp.value.trim()) { inp.value = c.name; return; }
+      return save(c, { name: inp.value.trim() });
+    }
+    save(c, { [f]: inp.value });
   }));
   document.getElementById('add-client').onclick = () => openClientModal();
   $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => openClientModal(state.clients.find((c) => c.id === b.dataset.edit)));
