@@ -136,7 +136,7 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .month-bar select { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; }
 .lg-i { display: inline-block; width: 16px; text-align: center; margin-right: 4px; color: var(--ok); }
 .lg-i.warn { color: var(--late); }
-.lg.ready { border: 1.5px solid var(--ok); }
+.lg.ready { border: 1.5px solid var(--soon); }
 .lg.missing { border: 1.5px dashed var(--late); background: transparent; }
 .month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
 .dow-head { font-size: 12px; color: var(--muted); text-align: center; padding: 2px 0; }
@@ -158,7 +158,7 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .chip.removed .chip-name { text-decoration: line-through; color: var(--muted); }
 .chip.unmapped .chip-name { font-style: italic; color: var(--muted); }
 .chip.plan { background: transparent; }
-.chip.plan.ready { border-color: var(--ok); }
+.chip.plan.ready { border-color: var(--soon); }
 .chip.plan.missing { border: 1px dashed var(--late); color: var(--late); }
 .section-title { font-size: 16px; margin: 24px 0 10px; text-transform: none; }
 .month-summary .num { text-align: center; }
@@ -202,6 +202,7 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .plan-legend i { width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
 .seg-pub { background: var(--ok); }
 .seg-sched { background: #3b82f6; }
+.seg-edit { background: var(--soon); }
 .seg-miss { background: transparent; box-shadow: inset 0 0 0 1.5px var(--late); }
 .plan-list { display: flex; flex-direction: column; gap: 8px; }
 .plan-row { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: var(--radius); }
@@ -226,6 +227,10 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .giro-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 4px 0 10px; margin-bottom: 4px; border-bottom: 1px dashed var(--border); }
 .giro-bar label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin: 0; }
 .giro-bar input { width: auto; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.stepper button { width: 32px; height: 32px; padding: 0; font-size: 18px; line-height: 1; }
+.stepper b { font-size: 17px; min-width: 20px; text-align: center; }
+.pd-row.ready .pd-status { color: var(--soon); font-weight: 600; }
 .plan-line { grid-area: line; color: var(--muted); }
 .plan-line b { color: var(--text); }
 .plan-detail { border-top: 1px solid var(--border); padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 2px; }

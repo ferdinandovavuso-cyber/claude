@@ -23,6 +23,7 @@ create table if not exists public.clients (
   videos_per_month int,                             -- video al mese da contratto
   pubblie_accounts text[] not null default '{}',   -- nomi esatti degli account su Pubblie
   cycle_start      date,                            -- inizio del giro in corso (lo decide l'utente)
+  cycle_edited     int not null default 0,          -- video montati nel giro in corso (li aggiorna il montatore)
   created_at       timestamptz not null default now()
 );
 
