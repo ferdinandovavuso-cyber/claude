@@ -15,10 +15,17 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 
 ## Viste
 
-- **Scadenze**: la lista di cose da fare del montatore, raggruppata per giorno di consegna, con il carico di video di ogni giorno.
-- **Calendario**: clienti × prossimi 28 giorni. Verde = uscita coperta, rosso = scoperta, bordo arancione = giorno di consegna.
-- **Clienti**: pianificazione delle uscite di ogni cliente.
-- **Registro**: storico delle registrazioni, per correggere gli errori.
+- **Piano** (vista iniziale): per ogni cliente e mese, video da contratto contro post pubblicati e programmati su Pubblie. Barra, quanti mancano, prossima uscita scoperta, entro quando consegnare, data dell'ultimo video del mese. Clic su un cliente per il dettaglio dei post e delle uscite da montare.
+- **Mese**: calendario del mese con i post reali di Pubblie e le uscite previste.
+- **Scadenze**: la lista di cose da fare del montatore, raggruppata per giorno di consegna.
+- **Clienti**: video/mese da contratto, giorni di uscita, anticipo, Nascondi/Mostra.
+- **Registro**: storico delle registrazioni manuali.
+
+### Come si calcolano i giorni di uscita
+- Dal contratto: uscite a settimana ≈ video/mese × 12 / 52 (12 → Lun·Mer·Ven, 8 → Mar·Ven, 24 → Lun–Sab…).
+- Il piano del mese parte dal giorno dopo l'ultimo post pronto su Pubblie e arriva sempre esattamente al numero del contratto: se i giorni standard non bastano aggiunge altri giorni (mai la domenica).
+- Si possono scegliere i giorni a mano cliccandoli in Clienti; **Auto** torna al calcolo dal contratto.
+- Contano i post pubblicati e programmati. I post rimossi dai social non contano.
 
 ## Dove gira
 

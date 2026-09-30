@@ -142,6 +142,19 @@ async function supabaseStore() {
   };
 }
 
+// ---------- Giorni di uscita ----------
+const perWeek = (schedule) => schedule.reduce((a, b) => a + b, 0);
+// Ritmo standard per N video al mese: uscite a settimana ≈ N·12/52, su giorni distanziati. Indici JS, 0 = domenica.
+const AUTO_DAYS = { 1: [1], 2: [2, 5], 3: [1, 3, 5], 4: [1, 2, 4, 5], 5: [1, 2, 3, 4, 5], 6: [1, 2, 3, 4, 5, 6], 7: [0, 1, 2, 3, 4, 5, 6] };
+function autoSchedule(videosPerMonth) {
+  if (!videosPerMonth) return [0, 0, 0, 0, 0, 0, 0];
+  const w = Math.min(7, Math.max(1, Math.round(videosPerMonth * 12 / 52)));
+  return [0, 1, 2, 3, 4, 5, 6].map((i) => (AUTO_DAYS[w].includes(i) ? 1 : 0));
+}
+// Giorni scelti a mano se ce ne sono, altrimenti calcolati dal contratto.
+const isAuto = (c) => !perWeek(c.schedule);
+const effectiveSchedule = (c) => (isAuto(c) ? autoSchedule(c.videos_per_month) : c.schedule);
+
 // ---------- Calcolo copertura ----------
 // Scorre i giorni dalla start_date consumando un video montato per ogni slot di pubblicazione.
 // Il primo slot che non si riesce a coprire è il "buco": la scadenza è lì meno i giorni di anticipo.
@@ -151,9 +164,9 @@ function compute(c, events) {
   const edited = sum(ev.filter((e) => e.kind === 'edited'));
   const raw = sum(ev.filter((e) => e.kind === 'raw'));
   const rawLeft = (c.initial_raw || 0) + raw - edited;
-  const perWeek = c.schedule.reduce((a, b) => a + b, 0);
-  const base = { c, edited, rawLeft, perWeek };
-  if (perWeek === 0 || c.hidden) return { ...base, status: 'paused' };
+  const schedule = effectiveSchedule(c);
+  const base = { c, edited, rawLeft, perWeek: perWeek(schedule) };
+  if (!base.perWeek || c.hidden) return { ...base, status: 'paused' };
 
   // I post già programmati su Pubblie sono video montati e pronti.
   const scheduled = state.publications.filter((p) => p.client_id === c.id && p.status === 'scheduled' && p.date >= c.start_date).length;
@@ -161,7 +174,7 @@ function compute(c, events) {
   let day = c.start_date;
   let lastCovered = null, gap = null, gapCovered = 0;
   for (let i = 0; i < 3650; i++) {
-    const n = c.schedule[weekday(day)];
+    const n = schedule[weekday(day)];
     if (n > 0) {
       const cov = Math.min(n, stock);
       stock -= cov;
@@ -178,15 +191,15 @@ function compute(c, events) {
   // Quanti video servono per coprire le pubblicazioni fino a 14 giorni da oggi (almeno il prossimo buco).
   const horizon = addDays(t, 14 + (c.lead_days || 0));
   let need = 0;
-  for (let d = gap; d <= horizon; d = addDays(d, 1)) need += c.schedule[weekday(d)];
-  need = Math.max(need - gapCovered, c.schedule[weekday(gap)] - gapCovered);
+  for (let d = gap; d <= horizon; d = addDays(d, 1)) need += schedule[weekday(d)];
+  need = Math.max(need - gapCovered, schedule[weekday(gap)] - gapCovered);
 
   return { ...base, lastCovered, gap, gapCovered, deadline, daysLeft, status, need, missedPublications: gap < t };
 }
 
 // ---------- Stato app ----------
 let store;
-let state = { clients: [], events: [], publications: [], lastSync: null, pubblieConnected: false, notice: null, view: 'scadenze', month: today().slice(0, 7), monthClient: '', showHidden: false };
+let state = { clients: [], events: [], publications: [], lastSync: null, pubblieConnected: false, notice: null, view: 'piano', month: today().slice(0, 7), monthClient: '', showHidden: false, openPlan: new Set() };
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal');
 const $form = document.getElementById('modal-form');
@@ -205,7 +218,7 @@ async function reload() {
 
 function render() {
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
-  ({ scadenze: viewScadenze, mese: viewMese, calendario: viewCalendario, clienti: viewClienti, registro: viewRegistro })[state.view]();
+  ({ piano: viewPiano, scadenze: viewScadenze, mese: viewMese, clienti: viewClienti, registro: viewRegistro })[state.view]();
 }
 
 const statusLabel = { late: 'In ritardo', soon: 'Urgente', ok: 'In regola', paused: 'In pausa' };
@@ -285,6 +298,141 @@ function viewScadenze() {
   $app.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => openEventModal(b.dataset.id, b.dataset.act));
 }
 
+// ---------- Vista: Piano (contratto del mese contro i post su Pubblie, cliente per cliente) ----------
+// Un'unica regola: contano i post pubblicati e quelli programmati su Pubblie nel mese.
+// I post rimossi dai social non contano (spesso vengono ripubblicati e sarebbero contati due volte).
+const DELIVERED = ['published', 'partial'];
+
+function monthPlan(c, ym) {
+  const t = today();
+  const [y, m] = ym.split('-').map(Number);
+  const first = `${ym}-01`;
+  const last = iso(new Date(y, m, 0));
+  const pubs = state.publications.filter((p) => p.client_id === c.id && p.date.startsWith(ym)).sort((a, b) => a.date.localeCompare(b.date));
+  const published = pubs.filter((p) => DELIVERED.includes(p.status)).length;
+  const scheduled = pubs.filter((p) => p.status === 'scheduled').length;
+  const target = c.videos_per_month || 0;
+  const missing = Math.max(0, target - published - scheduled);
+  const ready = pubs.filter((p) => DELIVERED.includes(p.status) || p.status === 'scheduled');
+  const coveredUntil = ready.length ? ready[ready.length - 1].date : null;
+
+  // Le uscite ancora da coprire partono dal giorno dopo l'ultimo post pronto su Pubblie (e mai prima di oggi).
+  // Prima i giorni di uscita del cliente; se nel mese non bastano per arrivare al contratto,
+  // si aggiungono gli altri giorni (domenica esclusa), così il piano torna sempre al numero del contratto.
+  const openSlots = [];
+  if (missing && last >= t) {
+    const schedule = effectiveSchedule(c);
+    const days = [];
+    for (let d = [first, t, coveredUntil ? addDays(coveredUntil, 1) : first].sort().pop(); d <= last; d = addDays(d, 1)) days.push(d);
+    const main = days.flatMap((d) => Array(schedule[weekday(d)]).fill(d));
+    const extra = days.filter((d) => !schedule[weekday(d)] && weekday(d) !== 0);
+    openSlots.push(...main.slice(0, missing));
+    const lack = missing - openSlots.length;
+    if (lack > 0) {
+      const step = extra.length / lack;
+      for (let i = 0; i < lack && i < extra.length; i++) openSlots.push(extra[Math.floor(i * step)]);
+      openSlots.sort();
+    }
+  }
+  const nextGap = openSlots[0] || null;
+  const lastVideo = openSlots.length ? openSlots[openSlots.length - 1] : coveredUntil;
+  const deadline = nextGap ? toWorkday(addDays(nextGap, -(c.lead_days || 0))) : null;
+
+  let status;
+  if (!target) status = 'none';
+  else if (!missing) status = 'done';
+  else if (last < t || (deadline && deadline < t)) status = 'late';
+  else if (deadline && diffDays(t, deadline) <= 2) status = 'soon';
+  else status = 'todo';
+  return { c, pubs, published, scheduled, target, missing, coveredUntil, openSlots, nextGap, deadline, lastVideo, status, past: last < t };
+}
+
+const PLAN_LABEL = { late: 'In ritardo', soon: 'Urgente', todo: 'Da montare', done: 'Completo', none: 'Nessun contratto' };
+const PLAN_ORDER = { late: 0, soon: 1, todo: 2, done: 3, none: 4 };
+
+function planBar(r) {
+  const total = Math.max(r.target, r.published + r.scheduled);
+  if (!total) return '';
+  const seg = (cls, n) => `<i class="${cls}"></i>`.repeat(n);
+  return `<div class="plan-bar" style="--n:${total}" aria-hidden="true">${seg('pub', r.published)}${seg('sched', r.scheduled)}${seg('miss', r.missing)}</div>`;
+}
+
+function planLine(r) {
+  if (r.status === 'none') return `${r.published} pubblicati · ${r.scheduled} programmati`;
+  if (r.status === 'done') return r.coveredUntil && !r.past ? `Coperto fino al ${fmt(r.coveredUntil)} · ultimo video del mese` : 'Contratto rispettato';
+  if (r.past) return `Nel mese ne sono usciti ${r.published} su ${r.target}`;
+  if (!r.nextGap) return `Mancano ${r.missing}`;
+  return `Prossima uscita scoperta ${fmt(r.nextGap)} · consegna entro <b>${fmt(r.deadline)}</b> · ultimo video del mese ${fmt(r.lastVideo)}`;
+}
+
+function viewPiano() {
+  const t = today();
+  const ym = state.month;
+  const [y, m] = ym.split('-').map(Number);
+  const rows = state.clients
+    .filter((c) => !c.hidden)
+    .map((c) => monthPlan(c, ym))
+    .filter((r) => r.target || r.pubs.length)
+    .sort((a, b) => PLAN_ORDER[a.status] - PLAN_ORDER[b.status] || (a.deadline || '9999').localeCompare(b.deadline || '9999') || b.missing - a.missing || a.c.name.localeCompare(b.c.name));
+
+  const withTarget = rows.filter((r) => r.target);
+  const tot = (k) => withTarget.reduce((a, r) => a + r[k], 0);
+  const done = withTarget.filter((r) => r.status === 'done').length;
+
+  const detail = (r) => `
+    <div class="plan-detail">
+      ${r.pubs.map((p) => `<div class="pd-row ${p.status}">
+        <span class="pd-date">${fmt(p.date)}</span>
+        <span class="pd-status">${p.status === 'scheduled' ? 'Programmato' : p.status === 'removed' ? 'Rimosso, non conta' : p.status === 'error' ? 'Errore' : p.status === 'partial' ? 'Pubblicato in parte' : 'Pubblicato'}</span>
+        <span class="pd-text">${esc(p.excerpt || '')}</span>
+      </div>`).join('')}
+      ${r.openSlots.map((d) => `<div class="pd-row open">
+        <span class="pd-date">${fmt(d)}</span><span class="pd-status">Da montare</span>
+        <span class="pd-text">consegna entro ${fmt(toWorkday(addDays(d, -(r.c.lead_days || 0))))}</span>
+      </div>`).join('')}
+      ${!r.pubs.length && !r.openSlots.length ? '<p class="muted small">Nessun post su Pubblie in questo mese.</p>' : ''}
+    </div>`;
+
+  $app.innerHTML = `
+    <div class="month-bar">
+      <button id="m-prev" aria-label="Mese precedente">‹</button>
+      <h2>${MONTHS[m - 1]} ${y}</h2>
+      <button id="m-next" aria-label="Mese successivo">›</button>
+      ${ym !== t.slice(0, 7) ? '<button id="m-today">Questo mese</button>' : ''}
+      <span class="sync-info small muted">${syncLabel()}</span>
+    </div>
+    <section class="summary">
+      <div class="stat"><b>${tot('target')}</b><span>video da contratto</span></div>
+      <div class="stat ok"><b>${tot('published')}</b><span>pubblicati</span></div>
+      <div class="stat"><b>${tot('scheduled')}</b><span>programmati su Pubblie</span></div>
+      <div class="stat ${tot('missing') ? 'late' : 'ok'}"><b>${tot('missing')}</b><span>mancano</span></div>
+      <div class="stat"><b>${done}/${withTarget.length}</b><span>clienti completi</span></div>
+    </section>
+    <div class="plan-legend small muted"><span><i class="pub"></i>pubblicato</span><span><i class="sched"></i>programmato</span><span><i class="miss"></i>da montare</span></div>
+    <div class="plan-list">
+      ${rows.map((r) => `
+        <article class="plan-row status-${r.status} ${state.openPlan.has(r.c.id) ? 'open' : ''}" data-plan="${r.c.id}">
+          <button class="plan-head" aria-expanded="${state.openPlan.has(r.c.id)}">
+            <span class="plan-name">${dot(r.c.color)}${esc(r.c.name)}</span>
+            <span class="plan-count">${r.target ? `<b>${r.published + r.scheduled}</b>/${r.target}` : `<b>${r.published + r.scheduled}</b>`}</span>
+            ${planBar(r)}
+            <span class="badge ${r.status}">${r.status === 'todo' || r.status === 'late' || r.status === 'soon' ? `${PLAN_LABEL[r.status]} · ${r.past ? 'mancati' : 'mancano'} ${r.missing}` : PLAN_LABEL[r.status]}</span>
+            <span class="plan-line small">${planLine(r)}</span>
+          </button>
+          ${state.openPlan.has(r.c.id) ? detail(r) : ''}
+        </article>`).join('') || '<div class="empty">Nessun cliente con contratto o post in questo mese.</div>'}
+    </div>`;
+
+  document.getElementById('m-prev').onclick = () => { state.month = shiftMonth(ym, -1); render(); };
+  document.getElementById('m-next').onclick = () => { state.month = shiftMonth(ym, 1); render(); };
+  document.getElementById('m-today')?.addEventListener('click', () => { state.month = t.slice(0, 7); render(); });
+  $app.querySelectorAll('[data-plan] .plan-head').forEach((b) => b.onclick = () => {
+    const id = b.closest('[data-plan]').dataset.plan;
+    if (state.openPlan.has(id)) state.openPlan.delete(id); else state.openPlan.add(id);
+    viewPiano();
+  });
+}
+
 // ---------- Vista: Mese (pubblicazioni reali da Pubblie + uscite pianificate) ----------
 const MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
 const PUB_LABEL = { published: 'Pubblicato', scheduled: 'Programmato su Pubblie', error: 'Errore di pubblicazione', partial: 'Pubblicato solo su alcuni canali', removed: 'Pubblicato, poi rimosso dai social' };
@@ -314,7 +462,7 @@ function viewMese() {
   // Uscite pianificate da oggi in poi: pronta se coperta, da montare se no.
   const planned = (d) => {
     if (d < t) return [];
-    return state.clients.filter((c) => !c.hidden && c.schedule[weekday(d)] > 0 && (!only || c.id === only))
+    return state.clients.filter((c) => !c.hidden && effectiveSchedule(c)[weekday(d)] > 0 && (!only || c.id === only))
       .filter((c) => !pubs.some((p) => p.client_id === c.id && p.date === d))
       .map((c) => {
         const r = coverage[c.id];
@@ -348,19 +496,6 @@ function viewMese() {
   const days = [];
   for (let d = first; d <= last; d = addDays(d, 1)) days.push(d);
 
-  // Riepilogo del mese per cliente: pubblicati contro contratto.
-  const rows = new Map();
-  for (const p of pubs) {
-    const key = p.client_id || `ch:${p.channel}`;
-    if (!rows.has(key)) rows.set(key, { c: byId[p.client_id], channel: p.channel, pub: 0, video: 0, sched: 0 });
-    const r = rows.get(key);
-    if (PUBLISHED.includes(p.status)) { r.pub++; if (p.has_video) r.video++; }
-    if (p.status === 'scheduled') r.sched++;
-  }
-  for (const c of state.clients) {
-    if (c.videos_per_month && !c.hidden && !rows.has(c.id) && (!only || c.id === only)) rows.set(c.id, { c, pub: 0, video: 0, sched: 0 });
-  }
-  const summary = [...rows.values()].sort((a, b) => (b.c?.videos_per_month || 0) - (a.c?.videos_per_month || 0) || (a.c?.name || a.channel).localeCompare(b.c?.name || b.channel));
   const hasData = state.publications.some((p) => inMonth(p.date));
 
   $app.innerHTML = `
@@ -392,30 +527,13 @@ function viewMese() {
       ${'<div class="day-cell blank"></div>'.repeat(lead)}
       ${days.map(dayCell).join('')}
     </div>
-    ${summary.length ? `
-    <h3 class="section-title">Riepilogo di ${MONTHS[m - 1]}</h3>
-    <table class="list month-summary">
-      <thead><tr><th>Cliente</th><th class="num">Pubblicati</th><th class="num">Programmati</th><th class="num">Contratto</th><th>Esito</th></tr></thead>
-      <tbody>${summary.map((r) => {
-        const target = r.c?.videos_per_month;
-        const done = r.pub + r.sched;
-        const verdict = !target ? '<span class="muted">nessun contratto nel CRM</span>'
-          : done >= target ? '<span class="st ok">in linea</span>'
-          : `<span class="st warn">mancano ${target - done}</span>`;
-        return `<tr>
-          <td>${r.c ? dot(r.c.color) + esc(r.c.name) : `<span class="muted">${esc(r.channel)} · non collegato</span>`}</td>
-          <td class="num">${r.pub}${r.video < r.pub ? ` <span class="muted small">(${r.pub - r.video} foto)</span>` : ''}</td>
-          <td class="num">${r.sched || ''}</td>
-          <td class="num">${target || '—'}</td>
-          <td>${verdict}</td>
-        </tr>`;
-      }).join('')}</tbody>
-    </table>` : ''}`;
+    <p class="muted small">Contratto contro pubblicati e programmati: vedi <a href="#" id="to-piano">Piano</a>.</p>`;
 
   document.getElementById('m-prev').onclick = () => { state.month = shiftMonth(ym, -1); render(); };
   document.getElementById('m-next').onclick = () => { state.month = shiftMonth(ym, 1); render(); };
   document.getElementById('m-today')?.addEventListener('click', () => { state.month = t.slice(0, 7); render(); });
   document.getElementById('m-client').onchange = (e) => { state.monthClient = e.target.value; render(); };
+  document.getElementById('to-piano').onclick = (e) => { e.preventDefault(); state.view = 'piano'; render(); };
   document.getElementById('m-sync')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
@@ -463,59 +581,23 @@ function syncLabel() {
   return `Pubblie aggiornato ${when}${r.unmapped?.length ? ` · <span title="${esc(r.unmapped.join(', '))}">${r.unmapped.length} canali non collegati</span>` : ''}`;
 }
 
-// ---------- Vista: Calendario (clienti × prossimi giorni) ----------
-function viewCalendario() {
-  const t = today();
-  const DAYS = 28;
-  const days = Array.from({ length: DAYS }, (_, i) => addDays(t, i));
-  const rows = state.clients.filter((c) => !c.hidden).map((c) => compute(c, state.events))
-    .sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
-
-  const cell = (r, d) => {
-    const n = r.c.schedule[weekday(d)];
-    const isDeadline = r.deadline === d || (d === t && r.status === 'late');
-    let cls = '', label = '';
-    if (n > 0 && r.status !== 'paused') {
-      if (d < r.gap) { cls = 'covered'; label = n; }
-      else if (d === r.gap && r.gapCovered > 0) { cls = 'partial'; label = `${r.gapCovered}/${n}`; }
-      else { cls = 'missing'; label = n; }
-    }
-    return `<td class="${cls} ${isDeadline ? 'deadline' : ''} ${[0, 6].includes(weekday(d)) ? 'we' : ''}" title="${esc(r.c.name)} · ${fmt(d)}${n ? ` · ${n} uscit${n > 1 ? 'e' : 'a'}` : ''}${isDeadline ? ' · CONSEGNA' : ''}">${label}</td>`;
-  };
-
-  $app.innerHTML = `
-    <div class="legend">
-      <span><i class="lg covered"></i>Uscita coperta</span>
-      <span><i class="lg partial"></i>Parzialmente coperta</span>
-      <span><i class="lg missing"></i>Uscita scoperta</span>
-      <span><i class="lg deadline"></i>Giorno di consegna</span>
-    </div>
-    <div class="cal-wrap">
-      <table class="cal">
-        <thead><tr><th class="sticky">Cliente</th>${days.map((d) => `<th class="${d === t ? 'today' : ''} ${[0, 6].includes(weekday(d)) ? 'we' : ''}"><small>${parse(d).toLocaleDateString('it-IT', { weekday: 'narrow' })}</small><br>${parse(d).getDate()}</th>`).join('')}</tr></thead>
-        <tbody>${rows.map((r) => `<tr><th class="sticky">${dot(r.c.color)}${esc(r.c.name)}</th>${days.map((d) => cell(r, d)).join('')}</tr>`).join('')}</tbody>
-      </table>
-    </div>`;
-}
-
 // ---------- Vista: Clienti (modificabile direttamente in tabella) ----------
-const perWeek = (schedule) => schedule.reduce((a, b) => a + b, 0);
-// Il contratto è "N video al mese": va bene se le uscite settimanali distano meno di 1 dal ritmo del contratto.
 const contractCheck = (c) => {
-  const w = perWeek(c.schedule);
-  if (!w) return { cls: 'todo', text: 'Da impostare' };
-  if (!c.videos_per_month) return { cls: '', text: `${w} a settimana` };
+  const w = perWeek(effectiveSchedule(c));
+  if (!w) return { cls: 'todo', text: 'Da impostare', hint: 'metti i video/mese o scegli i giorni' };
+  if (isAuto(c)) return { cls: 'ok', text: `${w} a settimana`, hint: `automatico dal contratto (${c.videos_per_month}/mese)` };
+  if (!c.videos_per_month) return { cls: '', text: `${w} a settimana`, hint: 'giorni scelti a mano' };
   const target = c.videos_per_month * 12 / 52;
   const ok = Math.abs(w - target) < 1;
-  return { cls: ok ? 'ok' : 'warn', text: `${w} a settimana`, hint: `contratto ${c.videos_per_month}/mese ≈ ${Math.round(target)} a settimana` };
+  return { cls: ok ? 'ok' : 'warn', text: `${w} a settimana`, hint: `giorni a mano · contratto ${c.videos_per_month}/mese ≈ ${Math.round(target)} a settimana` };
 };
 const DAY_LETTERS = { 1: 'L', 2: 'M', 3: 'M', 4: 'G', 5: 'V', 6: 'S', 0: 'D' };
 
 function viewClienti() {
   const hiddenCount = state.clients.filter((c) => c.hidden).length;
   const rows = state.clients.filter((c) => state.showHidden || !c.hidden).sort((a, b) =>
-    a.hidden - b.hidden || (perWeek(a.schedule) === 0) - (perWeek(b.schedule) === 0) || a.name.localeCompare(b.name));
-  const unset = rows.filter((c) => !c.hidden && !perWeek(c.schedule)).length;
+    a.hidden - b.hidden || !perWeek(effectiveSchedule(a)) - !perWeek(effectiveSchedule(b)) || a.name.localeCompare(b.name));
+  const unset = rows.filter((c) => !c.hidden && !perWeek(effectiveSchedule(c))).length;
   const status = (c) => {
     const k = contractCheck(c);
     return `<span class="st ${k.cls}">${k.text}</span>${k.hint ? `<span class="hint">${k.hint}</span>` : ''}`;
@@ -530,15 +612,17 @@ function viewClienti() {
     ${unmappedPanel()}
     <div class="table-wrap">
       <table class="list list-edit">
-        <thead><tr><th>Cliente</th><th>Giorni di uscita</th><th title="Giorni di anticipo della consegna rispetto all'uscita">Anticipo</th><th>Ritmo</th><th></th></tr></thead>
+        <thead><tr><th>Cliente</th><th>Giorni di uscita</th><th title="Video al mese da contratto">Video/mese</th><th title="Giorni di anticipo della consegna rispetto all'uscita">Anticipo</th><th>Ritmo</th><th></th></tr></thead>
         <tbody>${rows.map((c) => `
-          <tr class="${c.hidden ? 'hidden' : ''} ${perWeek(c.schedule) ? '' : 'unset'}" data-id="${c.id}">
+          <tr class="${c.hidden ? 'hidden' : ''} ${perWeek(effectiveSchedule(c)) ? '' : 'unset'}" data-id="${c.id}">
             <td class="name-cell"><div>
               <input type="color" data-f="color" value="${esc(c.color)}" aria-label="Colore">
               <input type="text" data-f="name" value="${esc(c.name)}" aria-label="Nome">
               ${c.hidden ? '<span class="badge">nascosto</span>' : ''}
             </div></td>
-            <td><div class="days">${WEEK.map(([i, l]) => `<button type="button" class="day ${c.schedule[i] ? 'on' : ''}" data-day="${i}" title="${l}${c.schedule[i] > 1 ? ` · ${c.schedule[i]} video` : ''}" aria-pressed="${!!c.schedule[i]}">${DAY_LETTERS[i]}${c.schedule[i] > 1 ? `<sup>${c.schedule[i]}</sup>` : ''}</button>`).join('')}</div></td>
+            <td><div class="days ${isAuto(c) ? 'auto' : ''}">${((sch) => WEEK.map(([i, l]) => `<button type="button" class="day ${sch[i] ? 'on' : ''}" data-day="${i}" title="${l}${sch[i] > 1 ? ` · ${sch[i]} video` : ''}${isAuto(c) ? ' · calcolato dal contratto, clicca per scegliere a mano' : ''}" aria-pressed="${!!sch[i]}">${DAY_LETTERS[i]}${sch[i] > 1 ? `<sup>${sch[i]}</sup>` : ''}</button>`).join(''))(effectiveSchedule(c))}
+              ${!isAuto(c) && c.videos_per_month ? `<button type="button" class="auto-btn" data-auto="${c.id}" title="Torna ai giorni calcolati dal contratto">Auto</button>` : ''}</div></td>
+            <td><div class="lead"><input type="number" min="0" max="200" data-f="videos_per_month" value="${c.videos_per_month ?? ''}" placeholder="—" aria-label="Video al mese da contratto"></div></td>
             <td><div class="lead"><input type="number" min="0" max="30" data-f="lead_days" value="${c.lead_days}" aria-label="Anticipo"><span class="muted small">gg</span></div></td>
             <td class="status" data-status>${status(c)}</td>
             <td class="right row-actions">
@@ -561,24 +645,30 @@ function viewClienti() {
   };
   const clientOf = (el) => state.clients.find((x) => x.id === el.closest('tr').dataset.id);
 
+  // Cliccare un giorno passa ai giorni scelti a mano, partendo da quelli calcolati; Auto torna al calcolo.
   $app.querySelectorAll('.day').forEach((btn) => btn.addEventListener('click', () => {
     const c = clientOf(btn);
     const i = Number(btn.dataset.day);
-    const schedule = [...c.schedule];
+    const schedule = [...effectiveSchedule(c)];
     schedule[i] = schedule[i] ? 0 : 1;
-    btn.classList.toggle('on', !!schedule[i]);
-    btn.setAttribute('aria-pressed', String(!!schedule[i]));
-    btn.innerHTML = DAY_LETTERS[i];
-    const tr = btn.closest('tr');
     save(c, { schedule });
-    tr.classList.toggle('unset', !perWeek(schedule));
-    tr.querySelector('[data-status]').innerHTML = status(c);
+    viewClienti();
+  }));
+  $app.querySelectorAll('[data-auto]').forEach((btn) => btn.addEventListener('click', () => {
+    save(clientOf(btn), { schedule: [0, 0, 0, 0, 0, 0, 0] });
+    viewClienti();
   }));
 
   $app.querySelectorAll('.list-edit input').forEach((inp) => inp.addEventListener('change', () => {
     const c = clientOf(inp);
     const f = inp.dataset.f;
     if (f === 'lead_days') return save(c, { lead_days: Math.max(0, Number(inp.value) || 0) });
+    if (f === 'videos_per_month') {
+      const v = inp.value === '' ? null : Math.max(0, Number(inp.value) || 0);
+      save(c, { videos_per_month: v });
+      viewClienti();
+      return;
+    }
     if (f === 'name') {
       if (!inp.value.trim()) { inp.value = c.name; return; }
       return save(c, { name: inp.value.trim() });

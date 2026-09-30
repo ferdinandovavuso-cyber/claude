@@ -80,19 +80,6 @@ main { padding: 16px; max-width: 1400px; margin: 0 auto; }
 
 .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
 .lg { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
-.lg.covered { background: var(--covered); } .lg.partial { background: linear-gradient(135deg, var(--covered) 50%, var(--missing) 50%); }
-.lg.missing { background: var(--missing); } .lg.deadline { border: 2px solid var(--accent); }
-.cal-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-.cal { border-collapse: collapse; font-size: 12px; }
-.cal th, .cal td { border: 1px solid var(--border); text-align: center; min-width: 30px; height: 30px; padding: 0 2px; }
-.cal thead th { font-weight: 500; color: var(--muted); line-height: 1.1; }
-.cal th.today { color: var(--accent); font-weight: 700; }
-.cal .we { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
-.cal .sticky { position: sticky; left: 0; background: var(--surface); text-align: left; padding: 0 10px; min-width: 190px; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 1; }
-.cal td.covered { background: var(--covered); font-weight: 600; }
-.cal td.partial { background: linear-gradient(135deg, var(--covered) 50%, var(--missing) 50%); font-weight: 600; }
-.cal td.missing { background: var(--missing); font-weight: 600; }
-.cal td.deadline { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 12px; }
 .toolbar .grow { flex: 1; margin: 0; }
@@ -102,7 +89,9 @@ main { padding: 16px; max-width: 1400px; margin: 0 auto; }
 .list-edit .name-cell > div input[type="color"] { width: 28px; height: 28px; flex: none; padding: 1px; }
 .list-edit .name-cell input[type="text"] { background: transparent; border-color: transparent; padding: 6px 8px; }
 .list-edit .name-cell input[type="text"]:hover, .list-edit .name-cell input[type="text"]:focus { border-color: var(--border); background: var(--bg); }
-.days { display: flex; gap: 4px; }
+.days { display: flex; gap: 4px; align-items: center; }
+.days.auto .day.on { background: color-mix(in srgb, var(--accent) 35%, transparent); border-color: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--text); }
+.auto-btn { padding: 3px 8px; font-size: 12px; margin-left: 4px; }
 .day { width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 13px; font-weight: 600; color: var(--muted); background: transparent; position: relative; }
 .day.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .day sup { position: absolute; top: -4px; right: -4px; background: var(--text); color: var(--bg); border-radius: 999px; font-size: 10px; padding: 0 4px; }
@@ -205,4 +194,48 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
   .days { justify-content: space-between; }
   .day { width: 38px; height: 38px; }
   .list-edit .status { min-width: 0; }
+}
+
+/* ---------- Piano ---------- */
+.plan-legend { display: flex; gap: 14px; margin: -4px 0 10px; }
+.plan-legend i, .plan-bar i { display: inline-block; border-radius: 2px; }
+.plan-legend i { width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
+.pub { background: var(--ok); }
+.sched { background: #3b82f6; }
+.miss { background: transparent; box-shadow: inset 0 0 0 1.5px var(--late); }
+.plan-list { display: flex; flex-direction: column; gap: 8px; }
+.plan-row { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: var(--radius); }
+.plan-row.status-late { border-left-color: var(--late); }
+.plan-row.status-soon { border-left-color: var(--soon); }
+.plan-row.status-todo { border-left-color: #3b82f6; }
+.plan-row.status-done { border-left-color: var(--ok); }
+.plan-head { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; padding: 12px 14px; display: grid; gap: 6px 14px; align-items: center;
+  grid-template-columns: minmax(180px, 1.2fr) 56px minmax(160px, 2fr) auto; grid-template-areas: "name count bar badge" "line line line line"; }
+.plan-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
+.plan-name { grid-area: name; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-count { grid-area: count; text-align: right; font-size: 15px; color: var(--muted); }
+.plan-count b { color: var(--text); font-size: 17px; }
+.plan-bar { grid-area: bar; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 3px; height: 14px; }
+.plan-bar i { height: 100%; }
+.plan-row .badge { grid-area: badge; justify-self: end; }
+.badge.todo { background: color-mix(in srgb, #3b82f6 30%, transparent); }
+.badge.done { background: color-mix(in srgb, var(--ok) 25%, transparent); }
+.badge.none { color: var(--muted); }
+.plan-line { grid-area: line; color: var(--muted); }
+.plan-line b { color: var(--text); }
+.plan-detail { border-top: 1px solid var(--border); padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 2px; }
+.pd-row { display: grid; grid-template-columns: 110px 150px 1fr; gap: 10px; font-size: 13px; padding: 4px 0; align-items: baseline; }
+.pd-date { font-weight: 600; }
+.pd-status { color: var(--muted); }
+.pd-row.published .pd-status, .pd-row.partial .pd-status { color: var(--ok); }
+.pd-row.scheduled .pd-status { color: #60a5fa; }
+.pd-row.open .pd-status, .pd-row.error .pd-status { color: var(--late); font-weight: 600; }
+.pd-row.removed { text-decoration: line-through; opacity: .6; }
+.pd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+@media (max-width: 700px) {
+  .plan-head { grid-template-columns: 1fr auto; grid-template-areas: "name count" "bar bar" "badge badge" "line line"; }
+  .plan-row .badge { justify-self: start; }
+  .pd-row { grid-template-columns: 80px 1fr; }
+  .pd-text { grid-column: 1 / -1; white-space: normal; }
 }
