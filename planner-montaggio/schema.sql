@@ -25,6 +25,7 @@ create table if not exists public.clients (
   cycle_start      date,                            -- inizio del giro in corso (lo decide l'utente)
   cycle_edited     int not null default 0,          -- video montati nel giro in corso (li aggiorna il montatore)
   to_shoot         boolean not null default false,  -- video ancora da girare: niente scadenze di montaggio
+  to_shoot_since   date,                            -- da quando è da girare (null se non lo è)
   created_at       timestamptz not null default now()
 );
 

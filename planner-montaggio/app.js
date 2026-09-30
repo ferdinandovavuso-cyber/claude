@@ -356,6 +356,17 @@ function giroPlan(c) {
   return { c, start, pubs, inGiro, overflow, published, scheduled, edited, toSchedule, target, missing, coveredUntil, readySlots, openSlots, nextGap, deadline, lastVideo, nextStart, status };
 }
 
+// «Da girare»: si ricorda da quando è acceso. Oltre SHOOT_STALE giorni il cliente va segnalato.
+const SHOOT_STALE = 14;
+const shootDays = (c) => (c.to_shoot && c.to_shoot_since ? diffDays(c.to_shoot_since, today()) : 0);
+const shootFields = (c, on) => (on
+  ? { to_shoot: true, to_shoot_since: c.to_shoot && c.to_shoot_since ? c.to_shoot_since : today() }
+  : { to_shoot: false, to_shoot_since: null });
+const shootAge = (c) => {
+  const n = shootDays(c);
+  return n === 0 ? 'da oggi' : n === 1 ? 'da 1 giorno' : `da ${n} giorni`;
+};
+
 const PLAN_LABEL = { late: 'In ritardo', soon: 'Urgente', todo: 'Da montare', done: 'Giro completo', shoot: 'Da girare', nostart: 'Manca inizio giro', none: 'Nessun contratto' };
 const PLAN_ORDER = { nostart: 0, late: 1, soon: 2, todo: 3, shoot: 4, done: 5, none: 6 };
 
@@ -368,7 +379,10 @@ function planBar(r) {
 
 function planLine(r) {
   if (r.status === 'none') return 'Imposta i video da contratto in Clienti';
-  if (r.status === 'shoot') return 'Video ancora da girare: nessuna scadenza di montaggio finché non spegni «Da girare»';
+  if (r.status === 'shoot') {
+    const since = r.c.to_shoot_since ? `Da girare dal ${fmt(r.c.to_shoot_since)}` : 'Da girare';
+    return `${shootDays(r.c) >= SHOOT_STALE ? `<b>${since}, ${shootAge(r.c)}</b>: contratto attivo e niente in uscita` : `${since} (${shootAge(r.c)})`} · nessuna scadenza di montaggio finché resta acceso`;
+  }
   if (r.status === 'nostart') return 'Apri e scegli da quando parte il giro';
   const from = `Giro dal ${fmt(r.start)}`;
   const prog = r.toSchedule ? ` · <b>${r.toSchedule === 1 ? '1 montato' : `${r.toSchedule} montati`} da programmare su Pubblie</b>` : '';
@@ -385,7 +399,7 @@ function viewPiano() {
     .filter((c) => !c.hidden)
     .map(giroPlan)
     .filter((r) => r.target)
-    .sort((a, b) => PLAN_ORDER[a.status] - PLAN_ORDER[b.status] || (a.deadline || '9999').localeCompare(b.deadline || '9999') || b.missing - a.missing || a.c.name.localeCompare(b.c.name));
+    .sort((a, b) => PLAN_ORDER[a.status] - PLAN_ORDER[b.status] || shootDays(b.c) - shootDays(a.c) || (a.deadline || '9999').localeCompare(b.deadline || '9999') || b.missing - a.missing || a.c.name.localeCompare(b.c.name));
 
   const tot = (k) => rows.filter((r) => r.status !== 'shoot').reduce((a, r) => a + r[k], 0);
   const toShoot = rows.filter((r) => r.status === 'shoot');
@@ -437,7 +451,7 @@ function viewPiano() {
       <div class="stat ${urgent ? 'late' : 'ok'}"><b>${urgent}</b><span>clienti urgenti o in ritardo</span></div>
       <div class="stat ${tot('toSchedule') ? 'soon' : ''}"><b>${tot('toSchedule')}</b><span>montati da programmare su Pubblie</span></div>
       <div class="stat ok"><b>${done}/${rows.length - toShoot.length}</b><span>giri completi</span></div>
-      <div class="stat" title="${esc(toShoot.map((r) => r.c.name).join(', '))}"><b>${toShoot.length}</b><span>clienti da girare</span></div>
+      <div class="stat ${toShoot.some((r) => shootDays(r.c) >= SHOOT_STALE) ? 'late' : ''}" title="${esc(toShoot.map((r) => `${r.c.name} (${shootAge(r.c)})`).join(', '))}"><b>${toShoot.length}</b><span>clienti da girare${toShoot.length ? ` · il più vecchio ${shootAge(toShoot.reduce((a, r) => (shootDays(r.c) > shootDays(a.c) ? r : a)).c)}` : ''}</span></div>
     </section>
     <div class="plan-legend small muted"><span><i class="seg-pub"></i>pubblicato</span><span><i class="seg-sched"></i>programmato</span><span><i class="seg-edit"></i>montato, non su Pubblie</span><span><i class="seg-miss"></i>da montare</span></div>
     <div class="plan-list">
@@ -447,7 +461,8 @@ function viewPiano() {
             <span class="plan-name">${dot(r.c.color)}${esc(r.c.name)}</span>
             <span class="plan-count" title="Video montati nel giro">${r.start && r.status !== 'shoot' ? `<b>${r.edited}</b>/${r.target}` : ''}</span>
             ${planBar(r)}
-            <span class="badge ${r.status}">${['todo', 'late', 'soon'].includes(r.status) ? `${PLAN_LABEL[r.status]} · mancano ${r.missing}` : PLAN_LABEL[r.status]}</span>
+            <span class="badge ${r.status}${r.status === 'shoot' && shootDays(r.c) >= SHOOT_STALE ? ' stale' : ''}">${['todo', 'late', 'soon'].includes(r.status) ? `${PLAN_LABEL[r.status]} · mancano ${r.missing}`
+              : r.status === 'shoot' && r.c.to_shoot_since ? `${PLAN_LABEL.shoot} · ${shootDays(r.c)} gg` : PLAN_LABEL[r.status]}</span>
             <span class="plan-line small">${planLine(r)}</span>
           </button>
           ${state.openPlan.has(r.c.id) ? detail(r) : ''}
@@ -467,7 +482,8 @@ function viewPiano() {
   $app.querySelectorAll('[data-giro-start]').forEach((i) => i.onchange = () => setStart(i, i.value));
   $app.querySelectorAll('[data-shoot]').forEach((i) => i.onchange = async () => {
     i.disabled = true;
-    await store.patchClient(i.closest('[data-plan]').dataset.plan, { to_shoot: i.checked });
+    const id = i.closest('[data-plan]').dataset.plan;
+    await store.patchClient(id, shootFields(state.clients.find((c) => c.id === id), i.checked));
     reload();
   });
   $app.querySelectorAll('[data-edited]').forEach((b) => b.onclick = async () => {
@@ -670,7 +686,7 @@ function viewClienti() {
             <td><div class="lead"><input type="number" min="0" max="30" data-f="lead_days" value="${c.lead_days}" aria-label="Anticipo"><span class="muted small">gg</span></div></td>
             <td class="status" data-status>${status(c)}</td>
             <td class="right row-actions">
- <label class="switch" title="Accendi finché i video del cliente sono ancora da girare: niente scadenze di montaggio"><input type="checkbox" data-shoot-row ${c.to_shoot ? 'checked' : ''}><span></span>Da girare</label>
+ <label class="switch" title="Accendi finché i video del cliente sono ancora da girare: niente scadenze di montaggio"><input type="checkbox" data-shoot-row ${c.to_shoot ? 'checked' : ''}><span></span><em class="sw-text">Da girare${c.to_shoot && c.to_shoot_since ? `<small class="${shootDays(c) >= SHOOT_STALE ? 'stale' : 'muted'}">${shootAge(c)}</small>` : ''}</em></label>
               <button data-hide="${c.id}" title="${c.hidden ? 'Fallo tornare in scadenze e calendari' : 'Toglilo da scadenze e calendari, senza cancellare niente'}">${c.hidden ? 'Mostra' : 'Nascondi'}</button>
               <button data-edit="${c.id}">Dettagli</button>
             </td>
@@ -729,7 +745,11 @@ function viewClienti() {
     await store.assignChannel(channel, c.id);
     await reload();
   });
-  $app.querySelectorAll('[data-shoot-row]').forEach((i) => i.onchange = () => save(clientOf(i), { to_shoot: i.checked }));
+  $app.querySelectorAll('[data-shoot-row]').forEach((i) => i.onchange = () => {
+    const c = clientOf(i);
+    save(c, shootFields(c, i.checked));
+    viewClienti();
+  });
   $app.querySelectorAll('[data-hide]').forEach((btn) => btn.onclick = () => {
     const c = state.clients.find((x) => x.id === btn.dataset.hide);
     save(c, { hidden: !c.hidden });
@@ -832,7 +852,7 @@ function openClientModal(c) {
     </div>
     <label>Account Pubblie collegati (uno per riga, nome esatto come su Pubblie)<textarea name="pubblie_accounts" rows="3" placeholder="es. Angelocar">${esc((c.pubblie_accounts || []).join('\n'))}</textarea></label>
     <label>Note<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
-    <label class="check"><input name="to_shoot" type="checkbox" ${c.to_shoot ? 'checked' : ''}> Da girare (niente scadenze di montaggio finché resta acceso)</label>
+    <label class="check"><input name="to_shoot" type="checkbox" ${c.to_shoot ? 'checked' : ''}> Da girare${c.to_shoot && c.to_shoot_since ? ` dal ${fmt(c.to_shoot_since)}` : ''} (niente scadenze di montaggio finché resta acceso)</label>
     <label class="check"><input name="hidden" type="checkbox" ${c.hidden ? 'checked' : ''}> Nascosto (non compare in scadenze e calendari, i dati restano)</label>
     <div class="actions right">
       ${isNew ? '' : '<button value="delete" class="danger" formnovalidate>Elimina</button>'}
@@ -854,7 +874,7 @@ function openClientModal(c) {
       name: f.get('name').trim(), color: f.get('color'), schedule,
       lead_days: Number(f.get('lead_days')) || 0, start_date: f.get('start_date'),
       initial_stock: Number(f.get('initial_stock')) || 0, initial_raw: Number(f.get('initial_raw')) || 0,
-      notes: f.get('notes') || null, hidden: f.get('hidden') === 'on', to_shoot: f.get('to_shoot') === 'on',
+      notes: f.get('notes') || null, hidden: f.get('hidden') === 'on', ...shootFields(c, f.get('to_shoot') === 'on'),
       videos_per_month: f.get('videos_per_month') === '' ? null : Number(f.get('videos_per_month')),
       cycle_start: f.get('cycle_start') || null,
       cycle_edited: Number(f.get('cycle_edited')) || 0,

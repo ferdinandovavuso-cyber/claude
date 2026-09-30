@@ -215,6 +215,11 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .plan-row.status-nostart { border-left-color: var(--soon); }
 .plan-row.status-shoot { border-left-color: #a855f7; }
 .badge.shoot { background: color-mix(in srgb, #a855f7 30%, transparent); }
+.badge.shoot.stale { background: var(--late); color: #fff; }
+.plan-row.status-shoot:has(.badge.stale) { border-left-color: var(--late); }
+.sw-text { font-style: normal; display: flex; flex-direction: column; line-height: 1.2; }
+.switch small { font-weight: 500; font-size: 11px; }
+.switch small.stale { color: var(--late); font-weight: 700; }
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .switch span { width: 34px; height: 20px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); position: relative; transition: background .15s; flex: none; }
