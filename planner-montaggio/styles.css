@@ -194,6 +194,8 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
   .days { justify-content: space-between; }
   .day { width: 38px; height: 38px; }
   .list-edit .status { min-width: 0; }
+  .list-edit td.row-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; white-space: normal; }
+  .list-edit td.row-actions .switch { margin-right: auto; }
 }
 
 /* ---------- Piano ---------- */
@@ -211,6 +213,16 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .plan-row.status-todo { border-left-color: #3b82f6; }
 .plan-row.status-done { border-left-color: var(--ok); }
 .plan-row.status-nostart { border-left-color: var(--soon); }
+.plan-row.status-shoot { border-left-color: #a855f7; }
+.badge.shoot { background: color-mix(in srgb, #a855f7 30%, transparent); }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch span { width: 34px; height: 20px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); position: relative; transition: background .15s; flex: none; }
+.switch span::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.switch input:checked + span { background: #a855f7; border-color: #a855f7; }
+.switch input:checked + span::after { transform: translateX(14px); background: #fff; }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row-actions .switch { margin-right: 8px; vertical-align: middle; }
 .plan-head { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; padding: 12px 14px; display: grid; gap: 6px 14px; align-items: center;
   grid-template-columns: minmax(180px, 1.2fr) 56px minmax(160px, 2fr) auto; grid-template-areas: "name count bar badge" "line line line line"; }
 .plan-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }

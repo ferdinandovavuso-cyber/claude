@@ -330,7 +330,7 @@ function giroPlan(c) {
   // Le prime sono coperte dai video montati da programmare, le altre sono da montare.
   const slots = [];
   const free = target - onPubblie;
-  if (start && free > 0) {
+  if (start && free > 0 && !c.to_shoot) {
     const schedule = effectiveSchedule(c);
     let d = [t, start, coveredUntil ? addDays(coveredUntil, 1) : start].sort().pop();
     for (let guard = 0; slots.length < free && guard < 400; guard++, d = addDays(d, 1)) {
@@ -347,6 +347,7 @@ function giroPlan(c) {
 
   let status;
   if (!target) status = 'none';
+  else if (c.to_shoot) status = 'shoot';
   else if (!start) status = 'nostart';
   else if (!missing) status = 'done';
   else if (deadline && deadline < t) status = 'late';
@@ -355,18 +356,19 @@ function giroPlan(c) {
   return { c, start, pubs, inGiro, overflow, published, scheduled, edited, toSchedule, target, missing, coveredUntil, readySlots, openSlots, nextGap, deadline, lastVideo, nextStart, status };
 }
 
-const PLAN_LABEL = { late: 'In ritardo', soon: 'Urgente', todo: 'Da montare', done: 'Giro completo', nostart: 'Manca inizio giro', none: 'Nessun contratto' };
-const PLAN_ORDER = { nostart: 0, late: 1, soon: 2, todo: 3, done: 4, none: 5 };
+const PLAN_LABEL = { late: 'In ritardo', soon: 'Urgente', todo: 'Da montare', done: 'Giro completo', shoot: 'Da girare', nostart: 'Manca inizio giro', none: 'Nessun contratto' };
+const PLAN_ORDER = { nostart: 0, late: 1, soon: 2, todo: 3, shoot: 4, done: 5, none: 6 };
 
 function planBar(r) {
   const total = Math.max(r.target, r.edited);
-  if (!total || !r.start) return '';
+  if (!total || !r.start || r.status === 'shoot') return '';
   const seg = (cls, n) => `<i class="${cls}"></i>`.repeat(n);
   return `<div class="plan-bar" style="--n:${total}" aria-hidden="true">${seg('seg-pub', r.published)}${seg('seg-sched', r.scheduled)}${seg('seg-edit', r.toSchedule)}${seg('seg-miss', r.missing)}</div>`;
 }
 
 function planLine(r) {
   if (r.status === 'none') return 'Imposta i video da contratto in Clienti';
+  if (r.status === 'shoot') return 'Video ancora da girare: nessuna scadenza di montaggio finché non spegni «Da girare»';
   if (r.status === 'nostart') return 'Apri e scegli da quando parte il giro';
   const from = `Giro dal ${fmt(r.start)}`;
   const prog = r.toSchedule ? ` · <b>${r.toSchedule === 1 ? '1 montato' : `${r.toSchedule} montati`} da programmare su Pubblie</b>` : '';
@@ -385,7 +387,8 @@ function viewPiano() {
     .filter((r) => r.target)
     .sort((a, b) => PLAN_ORDER[a.status] - PLAN_ORDER[b.status] || (a.deadline || '9999').localeCompare(b.deadline || '9999') || b.missing - a.missing || a.c.name.localeCompare(b.c.name));
 
-  const tot = (k) => rows.reduce((a, r) => a + r[k], 0);
+  const tot = (k) => rows.filter((r) => r.status !== 'shoot').reduce((a, r) => a + r[k], 0);
+  const toShoot = rows.filter((r) => r.status === 'shoot');
   const urgent = rows.filter((r) => r.status === 'late' || r.status === 'soon').length;
   const done = rows.filter((r) => r.status === 'done').length;
   const minEdited = (r) => r.edited - r.toSchedule; // sotto i post già su Pubblie non si scende
@@ -401,6 +404,7 @@ function viewPiano() {
   const detail = (r) => `
     <div class="plan-detail">
       <div class="giro-bar">
+        <label class="switch"><input type="checkbox" data-shoot ${r.c.to_shoot ? 'checked' : ''}><span></span>Da girare</label>
         <label>Inizio giro <input type="date" data-giro-start value="${r.start || ''}"></label>
         ${r.start ? `<span class="stepper" role="group" aria-label="Video montati nel giro">
           <span class="small">Montati</span>
@@ -432,7 +436,8 @@ function viewPiano() {
       <div class="stat ${tot('missing') ? 'late' : 'ok'}"><b>${tot('missing')}</b><span>video da montare</span></div>
       <div class="stat ${urgent ? 'late' : 'ok'}"><b>${urgent}</b><span>clienti urgenti o in ritardo</span></div>
       <div class="stat ${tot('toSchedule') ? 'soon' : ''}"><b>${tot('toSchedule')}</b><span>montati da programmare su Pubblie</span></div>
-      <div class="stat ok"><b>${done}/${rows.length}</b><span>giri completi</span></div>
+      <div class="stat ok"><b>${done}/${rows.length - toShoot.length}</b><span>giri completi</span></div>
+      <div class="stat" title="${esc(toShoot.map((r) => r.c.name).join(', '))}"><b>${toShoot.length}</b><span>clienti da girare</span></div>
     </section>
     <div class="plan-legend small muted"><span><i class="seg-pub"></i>pubblicato</span><span><i class="seg-sched"></i>programmato</span><span><i class="seg-edit"></i>montato, non su Pubblie</span><span><i class="seg-miss"></i>da montare</span></div>
     <div class="plan-list">
@@ -440,7 +445,7 @@ function viewPiano() {
         <article class="plan-row status-${r.status} ${state.openPlan.has(r.c.id) ? 'open' : ''}" data-plan="${r.c.id}">
           <button class="plan-head" aria-expanded="${state.openPlan.has(r.c.id)}">
             <span class="plan-name">${dot(r.c.color)}${esc(r.c.name)}</span>
-            <span class="plan-count" title="Video montati nel giro">${r.start ? `<b>${r.edited}</b>/${r.target}` : ''}</span>
+            <span class="plan-count" title="Video montati nel giro">${r.start && r.status !== 'shoot' ? `<b>${r.edited}</b>/${r.target}` : ''}</span>
             ${planBar(r)}
             <span class="badge ${r.status}">${['todo', 'late', 'soon'].includes(r.status) ? `${PLAN_LABEL[r.status]} · mancano ${r.missing}` : PLAN_LABEL[r.status]}</span>
             <span class="plan-line small">${planLine(r)}</span>
@@ -460,6 +465,11 @@ function viewPiano() {
     reload();
   };
   $app.querySelectorAll('[data-giro-start]').forEach((i) => i.onchange = () => setStart(i, i.value));
+  $app.querySelectorAll('[data-shoot]').forEach((i) => i.onchange = async () => {
+    i.disabled = true;
+    await store.patchClient(i.closest('[data-plan]').dataset.plan, { to_shoot: i.checked });
+    reload();
+  });
   $app.querySelectorAll('[data-edited]').forEach((b) => b.onclick = async () => {
     const id = b.closest('[data-plan]').dataset.plan;
     const r = rows.find((x) => x.c.id === id);
@@ -660,6 +670,7 @@ function viewClienti() {
             <td><div class="lead"><input type="number" min="0" max="30" data-f="lead_days" value="${c.lead_days}" aria-label="Anticipo"><span class="muted small">gg</span></div></td>
             <td class="status" data-status>${status(c)}</td>
             <td class="right row-actions">
+ <label class="switch" title="Accendi finché i video del cliente sono ancora da girare: niente scadenze di montaggio"><input type="checkbox" data-shoot-row ${c.to_shoot ? 'checked' : ''}><span></span>Da girare</label>
               <button data-hide="${c.id}" title="${c.hidden ? 'Fallo tornare in scadenze e calendari' : 'Toglilo da scadenze e calendari, senza cancellare niente'}">${c.hidden ? 'Mostra' : 'Nascondi'}</button>
               <button data-edit="${c.id}">Dettagli</button>
             </td>
@@ -718,6 +729,7 @@ function viewClienti() {
     await store.assignChannel(channel, c.id);
     await reload();
   });
+  $app.querySelectorAll('[data-shoot-row]').forEach((i) => i.onchange = () => save(clientOf(i), { to_shoot: i.checked }));
   $app.querySelectorAll('[data-hide]').forEach((btn) => btn.onclick = () => {
     const c = state.clients.find((x) => x.id === btn.dataset.hide);
     save(c, { hidden: !c.hidden });
@@ -820,6 +832,7 @@ function openClientModal(c) {
     </div>
     <label>Account Pubblie collegati (uno per riga, nome esatto come su Pubblie)<textarea name="pubblie_accounts" rows="3" placeholder="es. Angelocar">${esc((c.pubblie_accounts || []).join('\n'))}</textarea></label>
     <label>Note<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
+    <label class="check"><input name="to_shoot" type="checkbox" ${c.to_shoot ? 'checked' : ''}> Da girare (niente scadenze di montaggio finché resta acceso)</label>
     <label class="check"><input name="hidden" type="checkbox" ${c.hidden ? 'checked' : ''}> Nascosto (non compare in scadenze e calendari, i dati restano)</label>
     <div class="actions right">
       ${isNew ? '' : '<button value="delete" class="danger" formnovalidate>Elimina</button>'}
@@ -841,7 +854,7 @@ function openClientModal(c) {
       name: f.get('name').trim(), color: f.get('color'), schedule,
       lead_days: Number(f.get('lead_days')) || 0, start_date: f.get('start_date'),
       initial_stock: Number(f.get('initial_stock')) || 0, initial_raw: Number(f.get('initial_raw')) || 0,
-      notes: f.get('notes') || null, hidden: f.get('hidden') === 'on',
+      notes: f.get('notes') || null, hidden: f.get('hidden') === 'on', to_shoot: f.get('to_shoot') === 'on',
       videos_per_month: f.get('videos_per_month') === '' ? null : Number(f.get('videos_per_month')),
       cycle_start: f.get('cycle_start') || null,
       cycle_edited: Number(f.get('cycle_edited')) || 0,

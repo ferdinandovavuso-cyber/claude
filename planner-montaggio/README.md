@@ -17,6 +17,7 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 
 - **Piano** (vista iniziale): un **giro** per cliente. Il giro parte dalla data che scegli tu (**Inizio giro**) e comprende i primi N post pubblicati o programmati su Pubblie da quella data, dove N sono i video da contratto. Per ogni cliente: quanti ne sono pronti su N, quanti mancano, prossima uscita scoperta, entro quando consegnarla, data dell'ultimo video del giro. I post oltre N sono già del giro successivo. Il giro nuovo non parte da solo: a giro completo si apre il cliente e si preme **Nuovo giro** (o si cambia la data a mano).
   - **Montati**: il montatore apre il cliente e aggiorna con − / + quanti video del giro ha montato. Non si può scendere sotto i post già su Pubblie (un post pubblicato o programmato è per forza montato). La differenza tra montati e post su Pubblie compare in arancione: sono video pronti che vanno ancora programmati. **Nuovo giro** azzera i montati.
+  - **Da girare**: interruttore per i clienti il cui materiale non è ancora stato girato (nel dettaglio del Piano e in Clienti). Finché è acceso il cliente non ha scadenze né uscite da montare e non conta nei video da montare.
 - **Mese**: calendario con i post reali di Pubblie e le uscite del giro ancora da montare (bordo rosso tratteggiato).
 - **Scadenze**: la lista di cose da fare del montatore, raggruppata per giorno di consegna.
 - **Clienti**: video/mese da contratto, giorni di uscita, anticipo, Nascondi/Mostra.

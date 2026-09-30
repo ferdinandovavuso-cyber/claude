@@ -24,6 +24,7 @@ create table if not exists public.clients (
   pubblie_accounts text[] not null default '{}',   -- nomi esatti degli account su Pubblie
   cycle_start      date,                            -- inizio del giro in corso (lo decide l'utente)
   cycle_edited     int not null default 0,          -- video montati nel giro in corso (li aggiorna il montatore)
+  to_shoot         boolean not null default false,  -- video ancora da girare: niente scadenze di montaggio
   created_at       timestamptz not null default now()
 );
 
