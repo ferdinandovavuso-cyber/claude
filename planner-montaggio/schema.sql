@@ -22,6 +22,7 @@ create table if not exists public.clients (
   crm_id           uuid unique,                     -- fvl-core.crm_clienti.id
   videos_per_month int,                             -- video al mese da contratto
   pubblie_accounts text[] not null default '{}',   -- nomi esatti degli account su Pubblie
+  cycle_start      date,                            -- inizio del giro in corso (lo decide l'utente)
   created_at       timestamptz not null default now()
 );
 
@@ -81,11 +82,35 @@ $$;
 revoke all on function public.has_planner_key() from public;
 grant execute on function public.has_planner_key() to anon, authenticated;
 
+-- ---------- Token OAuth di Pubblie (solo Edge Function, con service role) ----------
+create table if not exists public.pubblie_oauth (
+  id                int primary key default 1 check (id = 1),
+  client_id         text,
+  client_secret     text,
+  redirect_uri      text,
+  access_token      text,
+  access_expires_at timestamptz,
+  refresh_token     text,
+  pkce_verifier     text,
+  oauth_state       text,
+  return_to         text,
+  connected_at      timestamptz,
+  updated_at        timestamptz not null default now()
+);
+insert into public.pubblie_oauth (id) values (1) on conflict do nothing;
+
+-- L'app sa solo se Pubblie è collegato, non vede i token.
+create or replace function public.pubblie_connected()
+returns boolean language sql stable security definer set search_path = '' as $$
+  select public.has_planner_key() and exists (select 1 from public.pubblie_oauth where refresh_token is not null or access_token is not null);
+$$;
+
 alter table public.clients        enable row level security;
 alter table public.events         enable row level security;
 alter table public.publications   enable row level security;
 alter table public.sync_runs      enable row level security;
 alter table public.planner_access enable row level security; -- nessuna policy: solo da dashboard
+alter table public.pubblie_oauth  enable row level security; -- nessuna policy: solo service role
 
 drop policy if exists planner_clients on public.clients;
 create policy planner_clients on public.clients for all to anon, authenticated

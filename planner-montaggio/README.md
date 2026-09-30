@@ -15,15 +15,15 @@ Il montatore registra **"+ Ho montato N"**. Tu registri **"+ Grezzi consegnati N
 
 ## Viste
 
-- **Piano** (vista iniziale): per ogni cliente e mese, video da contratto contro post pubblicati e programmati su Pubblie. Barra, quanti mancano, prossima uscita scoperta, entro quando consegnare, data dell'ultimo video del mese. Clic su un cliente per il dettaglio dei post e delle uscite da montare.
-- **Mese**: calendario del mese con i post reali di Pubblie e le uscite previste.
+- **Piano** (vista iniziale): un **giro** per cliente. Il giro parte dalla data che scegli tu (**Inizio giro**) e comprende i primi N post pubblicati o programmati su Pubblie da quella data, dove N sono i video da contratto. Per ogni cliente: quanti ne sono pronti su N, quanti mancano, prossima uscita scoperta, entro quando consegnarla, data dell'ultimo video del giro. I post oltre N sono già del giro successivo. Il giro nuovo non parte da solo: a giro completo si apre il cliente e si preme **Nuovo giro** (o si cambia la data a mano).
+- **Mese**: calendario con i post reali di Pubblie e le uscite del giro ancora da montare (bordo rosso tratteggiato).
 - **Scadenze**: la lista di cose da fare del montatore, raggruppata per giorno di consegna.
 - **Clienti**: video/mese da contratto, giorni di uscita, anticipo, Nascondi/Mostra.
 - **Registro**: storico delle registrazioni manuali.
 
 ### Come si calcolano i giorni di uscita
 - Dal contratto: uscite a settimana ≈ video/mese × 12 / 52 (12 → Lun·Mer·Ven, 8 → Mar·Ven, 24 → Lun–Sab…).
-- Il piano del mese parte dal giorno dopo l'ultimo post pronto su Pubblie e arriva sempre esattamente al numero del contratto: se i giorni standard non bastano aggiunge altri giorni (mai la domenica).
+- Le uscite da montare partono dal giorno dopo l'ultimo post pronto su Pubblie (mai prima di oggi) e seguono quei giorni finché il giro arriva al numero del contratto.
 - Si possono scegliere i giorni a mano cliccandoli in Clienti; **Auto** torna al calcolo dal contratto.
 - Contano i post pubblicati e programmati. I post rimossi dai social non contano.
 

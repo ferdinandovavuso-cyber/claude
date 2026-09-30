@@ -298,138 +298,150 @@ function viewScadenze() {
   $app.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => openEventModal(b.dataset.id, b.dataset.act));
 }
 
-// ---------- Vista: Piano (contratto del mese contro i post su Pubblie, cliente per cliente) ----------
-// Un'unica regola: contano i post pubblicati e quelli programmati su Pubblie nel mese.
+// ---------- Vista: Piano (giro del contratto contro i post su Pubblie, cliente per cliente) ----------
+// Ogni cliente ha un giro: parte dalla data che decidi tu (Inizio giro) e comprende i primi N video
+// pubblicati o programmati su Pubblie da quella data, dove N è il numero del contratto.
+// I post oltre N appartengono al giro successivo, che parte solo quando premi «Nuovo giro».
 // I post rimossi dai social non contano (spesso vengono ripubblicati e sarebbero contati due volte).
 const DELIVERED = ['published', 'partial'];
+const counts = (p) => DELIVERED.includes(p.status) || p.status === 'scheduled';
 
-function monthPlan(c, ym) {
+function giroPlan(c) {
   const t = today();
-  const [y, m] = ym.split('-').map(Number);
-  const first = `${ym}-01`;
-  const last = iso(new Date(y, m, 0));
-  const pubs = state.publications.filter((p) => p.client_id === c.id && p.date.startsWith(ym)).sort((a, b) => a.date.localeCompare(b.date));
-  const published = pubs.filter((p) => DELIVERED.includes(p.status)).length;
-  const scheduled = pubs.filter((p) => p.status === 'scheduled').length;
   const target = c.videos_per_month || 0;
-  const missing = Math.max(0, target - published - scheduled);
-  const ready = pubs.filter((p) => DELIVERED.includes(p.status) || p.status === 'scheduled');
-  const coveredUntil = ready.length ? ready[ready.length - 1].date : null;
+  const start = c.cycle_start || null;
+  const pubs = start
+    ? state.publications.filter((p) => p.client_id === c.id && p.date >= start).sort((a, b) => a.date.localeCompare(b.date))
+    : [];
+  const ready = pubs.filter(counts);
+  const giro = target ? ready.slice(0, target) : ready;
+  const overflow = target ? ready.slice(target) : [];
+  const inGiro = new Set(giro.map((p) => p.id));
+  const published = giro.filter((p) => DELIVERED.includes(p.status)).length;
+  const scheduled = giro.filter((p) => p.status === 'scheduled').length;
+  const missing = Math.max(0, target - giro.length);
+  const coveredUntil = giro.length ? giro[giro.length - 1].date : null;
 
-  // Le uscite ancora da coprire partono dal giorno dopo l'ultimo post pronto su Pubblie (e mai prima di oggi).
-  // Prima i giorni di uscita del cliente; se nel mese non bastano per arrivare al contratto,
-  // si aggiungono gli altri giorni (domenica esclusa), così il piano torna sempre al numero del contratto.
+  // Le uscite da coprire seguono i giorni di uscita del cliente, dal giorno dopo l'ultimo post pronto (mai prima di oggi).
   const openSlots = [];
-  if (missing && last >= t) {
+  if (start && missing) {
     const schedule = effectiveSchedule(c);
-    const days = [];
-    for (let d = [first, t, coveredUntil ? addDays(coveredUntil, 1) : first].sort().pop(); d <= last; d = addDays(d, 1)) days.push(d);
-    const main = days.flatMap((d) => Array(schedule[weekday(d)]).fill(d));
-    const extra = days.filter((d) => !schedule[weekday(d)] && weekday(d) !== 0);
-    openSlots.push(...main.slice(0, missing));
-    const lack = missing - openSlots.length;
-    if (lack > 0) {
-      const step = extra.length / lack;
-      for (let i = 0; i < lack && i < extra.length; i++) openSlots.push(extra[Math.floor(i * step)]);
-      openSlots.sort();
+    let d = [t, start, coveredUntil ? addDays(coveredUntil, 1) : start].sort().pop();
+    for (let guard = 0; openSlots.length < missing && guard < 400; guard++, d = addDays(d, 1)) {
+      for (let k = 0; k < schedule[weekday(d)] && openSlots.length < missing; k++) openSlots.push(d);
     }
   }
   const nextGap = openSlots[0] || null;
   const lastVideo = openSlots.length ? openSlots[openSlots.length - 1] : coveredUntil;
   const deadline = nextGap ? toWorkday(addDays(nextGap, -(c.lead_days || 0))) : null;
+  // Proposta per il giro successivo (a giro completo): il primo post oltre il contratto, altrimenti il giorno dopo l'ultimo video.
+  const nextStart = overflow[0]?.date || (coveredUntil ? [t, addDays(coveredUntil, 1)].sort().pop() : t);
 
   let status;
   if (!target) status = 'none';
+  else if (!start) status = 'nostart';
   else if (!missing) status = 'done';
-  else if (last < t || (deadline && deadline < t)) status = 'late';
+  else if (deadline && deadline < t) status = 'late';
   else if (deadline && diffDays(t, deadline) <= 2) status = 'soon';
   else status = 'todo';
-  return { c, pubs, published, scheduled, target, missing, coveredUntil, openSlots, nextGap, deadline, lastVideo, status, past: last < t };
+  return { c, start, pubs, inGiro, overflow, published, scheduled, target, missing, coveredUntil, openSlots, nextGap, deadline, lastVideo, nextStart, status };
 }
 
-const PLAN_LABEL = { late: 'In ritardo', soon: 'Urgente', todo: 'Da montare', done: 'Completo', none: 'Nessun contratto' };
-const PLAN_ORDER = { late: 0, soon: 1, todo: 2, done: 3, none: 4 };
+const PLAN_LABEL = { late: 'In ritardo', soon: 'Urgente', todo: 'Da montare', done: 'Giro completo', nostart: 'Manca inizio giro', none: 'Nessun contratto' };
+const PLAN_ORDER = { nostart: 0, late: 1, soon: 2, todo: 3, done: 4, none: 5 };
 
 function planBar(r) {
   const total = Math.max(r.target, r.published + r.scheduled);
-  if (!total) return '';
+  if (!total || !r.start) return '';
   const seg = (cls, n) => `<i class="${cls}"></i>`.repeat(n);
-  return `<div class="plan-bar" style="--n:${total}" aria-hidden="true">${seg('pub', r.published)}${seg('sched', r.scheduled)}${seg('miss', r.missing)}</div>`;
+  return `<div class="plan-bar" style="--n:${total}" aria-hidden="true">${seg('seg-pub', r.published)}${seg('seg-sched', r.scheduled)}${seg('seg-miss', r.missing)}</div>`;
 }
 
 function planLine(r) {
-  if (r.status === 'none') return `${r.published} pubblicati · ${r.scheduled} programmati`;
-  if (r.status === 'done') return r.coveredUntil && !r.past ? `Coperto fino al ${fmt(r.coveredUntil)} · ultimo video del mese` : 'Contratto rispettato';
-  if (r.past) return `Nel mese ne sono usciti ${r.published} su ${r.target}`;
-  if (!r.nextGap) return `Mancano ${r.missing}`;
-  return `Prossima uscita scoperta ${fmt(r.nextGap)} · consegna entro <b>${fmt(r.deadline)}</b> · ultimo video del mese ${fmt(r.lastVideo)}`;
+  if (r.status === 'none') return 'Imposta i video da contratto in Clienti';
+  if (r.status === 'nostart') return 'Apri e scegli da quando parte il giro';
+  const from = `Giro dal ${fmt(r.start)}`;
+  if (r.status === 'done') {
+    return `${from} · ultimo video ${fmt(r.lastVideo)}${r.overflow.length ? ` · <b>${r.overflow.length} già del giro successivo</b>` : ''}`;
+  }
+  return `${from} · prossima uscita scoperta ${fmt(r.nextGap)} · consegna entro <b>${fmt(r.deadline)}</b> · ultimo video del giro ${fmt(r.lastVideo)}`;
 }
 
+const PD_STATUS = { scheduled: 'Programmato', removed: 'Rimosso, non conta', error: 'Errore, non conta', partial: 'Pubblicato in parte', published: 'Pubblicato' };
+
 function viewPiano() {
-  const t = today();
-  const ym = state.month;
-  const [y, m] = ym.split('-').map(Number);
   const rows = state.clients
     .filter((c) => !c.hidden)
-    .map((c) => monthPlan(c, ym))
-    .filter((r) => r.target || r.pubs.length)
+    .map(giroPlan)
+    .filter((r) => r.target)
     .sort((a, b) => PLAN_ORDER[a.status] - PLAN_ORDER[b.status] || (a.deadline || '9999').localeCompare(b.deadline || '9999') || b.missing - a.missing || a.c.name.localeCompare(b.c.name));
 
-  const withTarget = rows.filter((r) => r.target);
-  const tot = (k) => withTarget.reduce((a, r) => a + r[k], 0);
-  const done = withTarget.filter((r) => r.status === 'done').length;
+  const tot = (k) => rows.reduce((a, r) => a + r[k], 0);
+  const urgent = rows.filter((r) => r.status === 'late' || r.status === 'soon').length;
+  const done = rows.filter((r) => r.status === 'done').length;
 
+  const pubRow = (p, r) => {
+    const next = counts(p) && !r.inGiro.has(p.id);
+    return `<div class="pd-row ${p.status} ${next ? 'next' : ''}">
+      <span class="pd-date">${fmt(p.date)}</span>
+      <span class="pd-status">${next ? 'Giro successivo' : PD_STATUS[p.status] || p.status}</span>
+      <span class="pd-text">${esc(p.excerpt || '')}</span>
+    </div>`;
+  };
   const detail = (r) => `
     <div class="plan-detail">
-      ${r.pubs.map((p) => `<div class="pd-row ${p.status}">
-        <span class="pd-date">${fmt(p.date)}</span>
-        <span class="pd-status">${p.status === 'scheduled' ? 'Programmato' : p.status === 'removed' ? 'Rimosso, non conta' : p.status === 'error' ? 'Errore' : p.status === 'partial' ? 'Pubblicato in parte' : 'Pubblicato'}</span>
-        <span class="pd-text">${esc(p.excerpt || '')}</span>
-      </div>`).join('')}
+      <div class="giro-bar">
+        <label>Inizio giro <input type="date" data-giro-start value="${r.start || ''}"></label>
+        ${r.status === 'done' ? `<button data-giro-new="${r.nextStart}">Nuovo giro dal ${fmt(r.nextStart)}</button>` : ''}
+        <span class="small muted">${r.target} video da contratto</span>
+      </div>
+      ${r.pubs.map((p) => pubRow(p, r)).join('')}
       ${r.openSlots.map((d) => `<div class="pd-row open">
         <span class="pd-date">${fmt(d)}</span><span class="pd-status">Da montare</span>
         <span class="pd-text">consegna entro ${fmt(toWorkday(addDays(d, -(r.c.lead_days || 0))))}</span>
       </div>`).join('')}
-      ${!r.pubs.length && !r.openSlots.length ? '<p class="muted small">Nessun post su Pubblie in questo mese.</p>' : ''}
+      ${r.start && !r.pubs.length && !r.openSlots.length ? '<p class="muted small">Nessun post su Pubblie da inizio giro.</p>' : ''}
     </div>`;
 
   $app.innerHTML = `
     <div class="month-bar">
-      <button id="m-prev" aria-label="Mese precedente">‹</button>
-      <h2>${MONTHS[m - 1]} ${y}</h2>
-      <button id="m-next" aria-label="Mese successivo">›</button>
-      ${ym !== t.slice(0, 7) ? '<button id="m-today">Questo mese</button>' : ''}
+      <h2>Giri in corso</h2>
       <span class="sync-info small muted">${syncLabel()}</span>
     </div>
     <section class="summary">
-      <div class="stat"><b>${tot('target')}</b><span>video da contratto</span></div>
-      <div class="stat ok"><b>${tot('published')}</b><span>pubblicati</span></div>
+      <div class="stat ${tot('missing') ? 'late' : 'ok'}"><b>${tot('missing')}</b><span>video da montare</span></div>
+      <div class="stat ${urgent ? 'late' : 'ok'}"><b>${urgent}</b><span>clienti urgenti o in ritardo</span></div>
       <div class="stat"><b>${tot('scheduled')}</b><span>programmati su Pubblie</span></div>
-      <div class="stat ${tot('missing') ? 'late' : 'ok'}"><b>${tot('missing')}</b><span>mancano</span></div>
-      <div class="stat"><b>${done}/${withTarget.length}</b><span>clienti completi</span></div>
+      <div class="stat ok"><b>${done}/${rows.length}</b><span>giri completi</span></div>
     </section>
-    <div class="plan-legend small muted"><span><i class="pub"></i>pubblicato</span><span><i class="sched"></i>programmato</span><span><i class="miss"></i>da montare</span></div>
+    <div class="plan-legend small muted"><span><i class="seg-pub"></i>pubblicato</span><span><i class="seg-sched"></i>programmato</span><span><i class="seg-miss"></i>da montare</span></div>
     <div class="plan-list">
       ${rows.map((r) => `
         <article class="plan-row status-${r.status} ${state.openPlan.has(r.c.id) ? 'open' : ''}" data-plan="${r.c.id}">
           <button class="plan-head" aria-expanded="${state.openPlan.has(r.c.id)}">
             <span class="plan-name">${dot(r.c.color)}${esc(r.c.name)}</span>
-            <span class="plan-count">${r.target ? `<b>${r.published + r.scheduled}</b>/${r.target}` : `<b>${r.published + r.scheduled}</b>`}</span>
+            <span class="plan-count">${r.start ? `<b>${r.published + r.scheduled}</b>/${r.target}` : ''}</span>
             ${planBar(r)}
-            <span class="badge ${r.status}">${r.status === 'todo' || r.status === 'late' || r.status === 'soon' ? `${PLAN_LABEL[r.status]} · ${r.past ? 'mancati' : 'mancano'} ${r.missing}` : PLAN_LABEL[r.status]}</span>
+            <span class="badge ${r.status}">${['todo', 'late', 'soon'].includes(r.status) ? `${PLAN_LABEL[r.status]} · mancano ${r.missing}` : PLAN_LABEL[r.status]}</span>
             <span class="plan-line small">${planLine(r)}</span>
           </button>
           ${state.openPlan.has(r.c.id) ? detail(r) : ''}
-        </article>`).join('') || '<div class="empty">Nessun cliente con contratto o post in questo mese.</div>'}
+        </article>`).join('') || '<div class="empty">Nessun cliente con video da contratto. Impostali in Clienti.</div>'}
     </div>`;
 
-  document.getElementById('m-prev').onclick = () => { state.month = shiftMonth(ym, -1); render(); };
-  document.getElementById('m-next').onclick = () => { state.month = shiftMonth(ym, 1); render(); };
-  document.getElementById('m-today')?.addEventListener('click', () => { state.month = t.slice(0, 7); render(); });
   $app.querySelectorAll('[data-plan] .plan-head').forEach((b) => b.onclick = () => {
     const id = b.closest('[data-plan]').dataset.plan;
     if (state.openPlan.has(id)) state.openPlan.delete(id); else state.openPlan.add(id);
     viewPiano();
+  });
+  const setStart = async (el, date) => {
+    const id = el.closest('[data-plan]').dataset.plan;
+    await store.patchClient(id, { cycle_start: date || null });
+    reload();
+  };
+  $app.querySelectorAll('[data-giro-start]').forEach((i) => i.onchange = () => setStart(i, i.value));
+  $app.querySelectorAll('[data-giro-new]').forEach((b) => b.onclick = () => {
+    if (confirm(`Chiudere il giro attuale e iniziarne uno nuovo dal ${fmtLong(b.dataset.giroNew)}?`)) setStart(b, b.dataset.giroNew);
   });
 }
 
@@ -457,19 +469,11 @@ function viewMese() {
 
   const hiddenIds = new Set(state.clients.filter((c) => c.hidden).map((c) => c.id));
   const pubs = state.publications.filter((p) => inMonth(p.date) && (only ? p.client_id === only : !hiddenIds.has(p.client_id)));
-  const coverage = Object.fromEntries(state.clients.filter((c) => !c.hidden).map((c) => [c.id, compute(c, state.events)]));
-
-  // Uscite pianificate da oggi in poi: pronta se coperta, da montare se no.
-  const planned = (d) => {
-    if (d < t) return [];
-    return state.clients.filter((c) => !c.hidden && effectiveSchedule(c)[weekday(d)] > 0 && (!only || c.id === only))
-      .filter((c) => !pubs.some((p) => p.client_id === c.id && p.date === d))
-      .map((c) => {
-        const r = coverage[c.id];
-        const ok = r.status !== 'paused' && (d < r.gap || (d === r.gap && r.gapCovered > 0));
-        return { c, ok };
-      });
-  };
+  // Uscite ancora da montare nel giro di ogni cliente (i video pronti sono già i post programmati su Pubblie).
+  const open = {};
+  for (const c of state.clients.filter((c) => !c.hidden && (!only || c.id === only))) {
+    for (const d of giroPlan(c).openSlots) (open[d] ||= []).push(c);
+  }
 
   const chip = (label, color, cls, title) =>
     `<span class="chip ${cls}" title="${esc(title)}"><i style="background:${esc(color)}"></i><span class="chip-name">${esc(label)}</span></span>`;
@@ -482,8 +486,7 @@ function viewMese() {
         return chip(c ? c.name : p.channel, c ? c.color : '#8b90a0', `pub ${p.status}${c ? '' : ' unmapped'}`,
           `${c ? c.name : p.channel + ' (non collegato a un cliente)'} · ${PUB_LABEL[p.status]}${p.has_video ? '' : ' · foto, non video'}\n${p.excerpt || ''}`);
       }),
-      ...planned(d).map(({ c, ok }) => chip(c.name, c.color, ok ? 'plan ready' : 'plan missing',
-        `${c.name} · uscita prevista · ${ok ? 'video pronto' : 'video da montare'}`)),
+      ...(open[d] || []).map((c) => chip(c.name, c.color, 'plan missing', `${c.name} · uscita del giro · video da montare`)),
     ];
     const n = +d.slice(8);
     return `<div class="day-cell ${d === t ? 'today' : ''} ${d < t ? 'past' : ''}">
@@ -517,8 +520,7 @@ function viewMese() {
       <span><b class="lg-i">✓</b>Pubblicato</span>
       <span><b class="lg-i">⏱</b>Programmato su Pubblie</span>
       <span><b class="lg-i warn">!</b>Errore o solo alcuni canali</span>
-      <span><i class="lg ready"></i>Uscita prevista, video pronto</span>
-      <span><i class="lg missing"></i>Uscita prevista, video da montare</span>
+      <span><i class="lg missing"></i>Uscita del giro, video da montare</span>
     </div>
     ${state.notice ? `<p class="notice ${state.notice.ok ? 'ok' : 'warn'}">${esc(state.notice.text)}</p>` : ''}
     ${!hasData && last < t ? '<p class="muted small">Nessuna pubblicazione importata da Pubblie per questo mese.</p>' : ''}
@@ -527,7 +529,7 @@ function viewMese() {
       ${'<div class="day-cell blank"></div>'.repeat(lead)}
       ${days.map(dayCell).join('')}
     </div>
-    <p class="muted small">Contratto contro pubblicati e programmati: vedi <a href="#" id="to-piano">Piano</a>.</p>`;
+    <p class="muted small">Avanzamento dei giri: vedi <a href="#" id="to-piano">Piano</a>.</p>`;
 
   document.getElementById('m-prev').onclick = () => { state.month = shiftMonth(ym, -1); render(); };
   document.getElementById('m-next').onclick = () => { state.month = shiftMonth(ym, 1); render(); };
@@ -780,7 +782,8 @@ function openClientModal(c) {
       <label>Grezzi già in mano al montatore<input name="initial_raw" type="number" min="0" value="${c.initial_raw}"></label>
     </div>
     <div class="row">
-      <label>Video al mese da contratto<input name="videos_per_month" type="number" min="0" max="200" value="${c.videos_per_month ?? ''}" placeholder="nessun contratto"></label>
+      <label>Video per giro da contratto<input name="videos_per_month" type="number" min="0" max="200" value="${c.videos_per_month ?? ''}" placeholder="nessun contratto"></label>
+      <label>Inizio giro<input name="cycle_start" type="date" value="${c.cycle_start || ''}"></label>
     </div>
     <label>Account Pubblie collegati (uno per riga, nome esatto come su Pubblie)<textarea name="pubblie_accounts" rows="3" placeholder="es. Angelocar">${esc((c.pubblie_accounts || []).join('\n'))}</textarea></label>
     <label>Note<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
@@ -807,6 +810,7 @@ function openClientModal(c) {
       initial_stock: Number(f.get('initial_stock')) || 0, initial_raw: Number(f.get('initial_raw')) || 0,
       notes: f.get('notes') || null, hidden: f.get('hidden') === 'on',
       videos_per_month: f.get('videos_per_month') === '' ? null : Number(f.get('videos_per_month')),
+      cycle_start: f.get('cycle_start') || null,
       pubblie_accounts: [...new Set(String(f.get('pubblie_accounts') || '').split('\n').map((x) => x.trim()).filter(Boolean))],
     });
     reload();

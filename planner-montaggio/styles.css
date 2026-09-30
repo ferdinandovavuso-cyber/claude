@@ -200,15 +200,16 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .plan-legend { display: flex; gap: 14px; margin: -4px 0 10px; }
 .plan-legend i, .plan-bar i { display: inline-block; border-radius: 2px; }
 .plan-legend i { width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
-.pub { background: var(--ok); }
-.sched { background: #3b82f6; }
-.miss { background: transparent; box-shadow: inset 0 0 0 1.5px var(--late); }
+.seg-pub { background: var(--ok); }
+.seg-sched { background: #3b82f6; }
+.seg-miss { background: transparent; box-shadow: inset 0 0 0 1.5px var(--late); }
 .plan-list { display: flex; flex-direction: column; gap: 8px; }
 .plan-row { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: var(--radius); }
 .plan-row.status-late { border-left-color: var(--late); }
 .plan-row.status-soon { border-left-color: var(--soon); }
 .plan-row.status-todo { border-left-color: #3b82f6; }
 .plan-row.status-done { border-left-color: var(--ok); }
+.plan-row.status-nostart { border-left-color: var(--soon); }
 .plan-head { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; padding: 12px 14px; display: grid; gap: 6px 14px; align-items: center;
   grid-template-columns: minmax(180px, 1.2fr) 56px minmax(160px, 2fr) auto; grid-template-areas: "name count bar badge" "line line line line"; }
 .plan-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
@@ -221,6 +222,10 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .badge.todo { background: color-mix(in srgb, #3b82f6 30%, transparent); }
 .badge.done { background: color-mix(in srgb, var(--ok) 25%, transparent); }
 .badge.none { color: var(--muted); }
+.badge.nostart { background: color-mix(in srgb, var(--soon) 25%, transparent); }
+.giro-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 4px 0 10px; margin-bottom: 4px; border-bottom: 1px dashed var(--border); }
+.giro-bar label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin: 0; }
+.giro-bar input { width: auto; }
 .plan-line { grid-area: line; color: var(--muted); }
 .plan-line b { color: var(--text); }
 .plan-detail { border-top: 1px solid var(--border); padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 2px; }
@@ -231,6 +236,8 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 .pd-row.scheduled .pd-status { color: #60a5fa; }
 .pd-row.open .pd-status, .pd-row.error .pd-status { color: var(--late); font-weight: 600; }
 .pd-row.removed { text-decoration: line-through; opacity: .6; }
+.pd-row.next { opacity: .55; }
+.pd-row.next .pd-status { color: var(--muted); font-style: italic; }
 .pd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 
 @media (max-width: 700px) {
